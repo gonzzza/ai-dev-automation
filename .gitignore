@@ -1,0 +1,11 @@
+node_modules/
+coverage/
+*.log
+.env
+.env.*
+!.env.example
+# Build output. review-action/dist is committed on purpose (GitHub runs it directly).
+dist/
+!review-action/dist/
+# Personal Claude Code context, never committed
+CLAUDE.local.md
