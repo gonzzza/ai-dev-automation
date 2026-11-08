@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+import { fileURLToPath } from "node:url";
 import { query, type Options, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
 import { createChecksServer } from "./checks.js";
@@ -30,24 +32,28 @@ export interface AgentRun {
   durationMs: number;
 }
 
-export function buildPrompt(spec: Spec, writableDirs: string[]): string {
-  return `Implement the feature spec below in this repository.
+/** The agent's instructions live in agent/prompt.md so they can be edited as prose; guardrails stay in code. */
+export const PROMPT_FILE = fileURLToPath(new URL("../prompt.md", import.meta.url));
 
-Work like this:
-1. Read CLAUDE.md and the existing code in ${writableDirs.join(", ")} to learn the conventions.
-2. Plan the change before editing.
-3. Implement it with Vitest tests that cover every acceptance criterion. Keep the change focused on the spec.
-4. Call the run_checks tool. If it fails, fix the problem and call it again, until it passes.
+export async function loadPromptTemplate(path: string = PROMPT_FILE): Promise<string> {
+  return readFile(path, "utf8");
+}
 
-Rules:
-- Only create or edit files under: ${writableDirs.join(", ")}. Writes elsewhere are denied.
-- You have no shell. run_checks is the only way to lint, typecheck and run tests.
-- Do not commit, branch or push. The harness handles git and opens the PR after you finish.
-- If the spec is ambiguous, choose the simplest reasonable interpretation and record it in notes.
-
-<spec path="${spec.path}">
-${spec.body}
-</spec>`;
+/**
+ * Fills the {{placeholders}} in the prompt template. One pass, so placeholder-like text inside the
+ * spec is never expanded, and an unknown placeholder is an error rather than a silent gap in the prompt.
+ */
+export function buildPrompt(template: string, spec: Spec, writableDirs: string[]): string {
+  const values: Record<string, string> = {
+    writableDirs: writableDirs.join(", "),
+    specPath: spec.path,
+    specBody: spec.body,
+  };
+  return template.trimEnd().replace(/\{\{(\w+)\}\}/g, (match, name: string) => {
+    const value = values[name];
+    if (value === undefined) throw new Error(`Unknown placeholder ${match} in the prompt template.`);
+    return value;
+  });
 }
 
 /** One line per notable event, so a human watching the terminal can follow along. */
@@ -88,7 +94,8 @@ export async function runAgent(
     persistSession: false,
   };
 
-  for await (const message of query({ prompt: buildPrompt(spec, config.writableDirs), options })) {
+  const prompt = buildPrompt(await loadPromptTemplate(), spec, config.writableDirs);
+  for await (const message of query({ prompt, options })) {
     const line = describeMessage(message);
     if (line) log(line);
 

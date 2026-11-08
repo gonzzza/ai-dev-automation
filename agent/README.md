@@ -51,6 +51,12 @@ The agent is sandboxed by tool design, not by trust:
 - **Budgets.** `--max-turns` and `--max-budget` stop a runaway loop.
 - **Reproducible context.** It loads project settings (`CLAUDE.md`) only, not user or local settings.
 
+## Prompt in Markdown, guardrails in code
+
+The agent's instructions are in [`prompt.md`](prompt.md), a plain Markdown file with `{{writableDirs}}`, `{{specPath}}` and `{{specBody}}` placeholders. To change how the agent works, edit the prose; no TypeScript change is needed. A typo in a placeholder fails the tests instead of producing a broken prompt.
+
+The rules that must hold no matter what the model does are in TypeScript: the permission policy, the single `run_checks` tool, the schema-validated report, the turn and budget limits, and the git and PR steps. This is the reason the agent is an [Agent SDK](https://code.claude.com/docs/en/agent-sdk) program, not just a Markdown subagent for Claude Code. A Markdown agent asks the model to stay in scope and to run only the checks. It usually needs a shell to do that, and its output is free text. This agent runs unattended on untrusted spec input, so those rules are enforced in code, and they are unit tested.
+
 ## Development
 
 ```sh
