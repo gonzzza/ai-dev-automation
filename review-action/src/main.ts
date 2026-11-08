@@ -2,7 +2,7 @@ import * as core from "@actions/core";
 import * as github from "@actions/github";
 import Anthropic from "@anthropic-ai/sdk";
 import { DEFAULT_EXCLUDE, selectFiles } from "./diff.js";
-import { publishReview } from "./publish.js";
+import { publishReview, supersedePreviousReviews } from "./publish.js";
 import { anchorFindings, renderSummary } from "./render.js";
 import { EFFORTS, reviewDiff, type Effort } from "./review.js";
 import { bySeverityDesc, parseFailOn, shouldFail } from "./schema.js";
@@ -54,14 +54,17 @@ async function run(): Promise<void> {
   const { inline, anchored, unanchored } = anchorFindings(findings, included);
   const summary = renderSummary(result.review, unanchored, skipped, { ...result, reviewedFiles: included.length });
 
-  const mode = await publishReview(
-    octokit,
-    { owner, repo, pullNumber: pr.number, commitId: String(pr.head.sha) },
-    summary,
-    inline,
-    anchored,
-  );
+  const target = { owner, repo, pullNumber: pr.number, commitId: String(pr.head.sha) };
+  const { mode, reviewId } = await publishReview(octokit, target, summary, inline, anchored);
   core.info(`Posted review: ${findings.length} finding(s), ${inline.length} inline (${mode}).`);
+
+  try {
+    const superseded = await supersedePreviousReviews(octokit, target, reviewId);
+    if (superseded) core.info(`Marked ${superseded} earlier AI review(s) as outdated.`);
+  } catch (error) {
+    // Cosmetic cleanup: never fail the check over it.
+    core.warning(`Could not mark earlier AI reviews as outdated: ${error instanceof Error ? error.message : String(error)}`);
+  }
 
   core.setOutput("findings", String(findings.length));
   core.setOutput("highest-severity", [...findings].sort(bySeverityDesc)[0]?.severity ?? "none");

@@ -27,7 +27,8 @@ jobs:
       - name: Check review-action/dist is up to date
         run: |
           npm run build -w review-action
-          if ! git diff --quiet -- review-action/dist; then
+          # status --porcelain also catches new untracked build output, not just modified files.
+          if [ -n "$(git status --porcelain -- review-action/dist)" ]; then
             echo "::error::review-action/dist is stale. Run 'npm run build -w review-action' and commit the result."
             exit 1
           fi

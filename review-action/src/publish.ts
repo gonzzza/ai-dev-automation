@@ -1,8 +1,9 @@
 import type { getOctokit } from "@actions/github";
-import { renderFindingListItem, type InlineComment } from "./render.js";
+import { renderFindingListItem, REVIEW_MARKER, type InlineComment } from "./render.js";
 import type { Finding } from "./schema.js";
 
 export type Octokit = ReturnType<typeof getOctokit>;
+type Client = Pick<Octokit, "rest" | "graphql" | "paginate">;
 
 export interface PublishTarget {
   owner: string;
@@ -10,6 +11,10 @@ export interface PublishTarget {
   pullNumber: number;
   commitId: string;
 }
+
+/** Body that replaces an older AI review. Deliberately does not contain REVIEW_MARKER. */
+export const SUPERSEDED_BODY =
+  "<!-- ai-dev-automation:review-superseded -->\n\n_🤖 This AI review is outdated. See the latest one below._";
 
 /**
  * Post one PR review with inline comments. If GitHub rejects the inline
@@ -22,7 +27,7 @@ export async function publishReview(
   summary: string,
   inline: InlineComment[],
   anchored: Finding[],
-): Promise<"inline" | "body-only"> {
+): Promise<{ mode: "inline" | "body-only"; reviewId: number }> {
   const base = {
     owner: target.owner,
     repo: target.repo,
@@ -31,14 +36,47 @@ export async function publishReview(
     event: "COMMENT" as const,
   };
   try {
-    await octokit.rest.pulls.createReview({ ...base, body: summary, comments: inline });
-    return "inline";
+    const { data } = await octokit.rest.pulls.createReview({ ...base, body: summary, comments: inline });
+    return { mode: "inline", reviewId: data.id };
   } catch (error) {
     if ((error as { status?: number }).status !== 422 || inline.length === 0) throw error;
-    await octokit.rest.pulls.createReview({
+    const { data } = await octokit.rest.pulls.createReview({
       ...base,
       body: `${summary}\n\n### Inline findings\n\n${anchored.map(renderFindingListItem).join("\n")}`,
     });
-    return "body-only";
+    return { mode: "body-only", reviewId: data.id };
   }
+}
+
+const MINIMIZE = `mutation($id: ID!) {
+  minimizeComment(input: { subjectId: $id, classifier: OUTDATED }) { clientMutationId }
+}`;
+
+/**
+ * Keep one live AI review per PR: earlier ones get their body replaced and
+ * their inline comments collapsed as outdated. Runs after the new review is
+ * posted, so a failed run never leaves the PR without a review.
+ * Returns the number of reviews superseded.
+ */
+export async function supersedePreviousReviews(octokit: Client, target: PublishTarget, keepReviewId: number): Promise<number> {
+  const { owner, repo, pullNumber } = target;
+  const reviews = await octokit.paginate(octokit.rest.pulls.listReviews, { owner, repo, pull_number: pullNumber, per_page: 100 });
+  const stale = reviews.filter(
+    (r) => r.id !== keepReviewId && r.user?.type === "Bot" && r.body.includes(REVIEW_MARKER),
+  );
+
+  for (const review of stale) {
+    await octokit.rest.pulls.updateReview({ owner, repo, pull_number: pullNumber, review_id: review.id, body: SUPERSEDED_BODY });
+    const comments = await octokit.paginate(octokit.rest.pulls.listCommentsForReview, {
+      owner,
+      repo,
+      pull_number: pullNumber,
+      review_id: review.id,
+      per_page: 100,
+    });
+    for (const comment of comments) {
+      await octokit.graphql(MINIMIZE, { id: comment.node_id });
+    }
+  }
+  return stale.length;
 }
