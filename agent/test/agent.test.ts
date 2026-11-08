@@ -1,4 +1,5 @@
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
+import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { AGENT_REPORT_JSON_SCHEMA, buildPrompt, describeMessage, loadPromptTemplate } from "../src/agent.js";
 import { parseSpec } from "../src/spec.js";
@@ -42,6 +43,15 @@ describe("describeMessage", () => {
     } as unknown as SDKMessage;
     expect(describeMessage(message)).toBe("  → Read demo-app/src/retry.ts\n  → run_checks");
     expect(describeMessage({ type: "system" } as unknown as SDKMessage)).toBeUndefined();
+  });
+
+  it("shows absolute paths relative to the repo root", () => {
+    const root = resolve("repo");
+    const message = {
+      type: "assistant",
+      message: { content: [{ type: "tool_use", id: "1", name: "Write", input: { file_path: join(root, "demo-app", "src", "a.ts") } }] },
+    } as unknown as SDKMessage;
+    expect(describeMessage(message, root)).toBe("  → Write demo-app/src/a.ts");
   });
 });
 

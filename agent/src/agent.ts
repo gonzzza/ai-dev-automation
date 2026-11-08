@@ -1,4 +1,5 @@
 import { readFile } from "node:fs/promises";
+import { isAbsolute, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { query, type Options, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
@@ -60,14 +61,15 @@ export function buildPrompt(template: string, spec: Spec, writableDirs: string[]
 }
 
 /** One line per notable event, so a human watching the terminal can follow along. */
-export function describeMessage(message: SDKMessage): string | undefined {
+export function describeMessage(message: SDKMessage, repoRoot?: string): string | undefined {
   if (message.type !== "assistant") return undefined;
   const lines: string[] = [];
   for (const block of message.message.content) {
     if (block.type === "tool_use") {
       const input = block.input as Record<string, unknown>;
-      const target = input.file_path ?? input.pattern ?? input.path ?? "";
-      lines.push(`  → ${block.name.replace("mcp__repo__", "")} ${String(target)}`.trimEnd());
+      let target = String(input.file_path ?? input.pattern ?? input.path ?? "");
+      if (repoRoot && isAbsolute(target)) target = relative(repoRoot, target).replace(/\\/g, "/");
+      lines.push(`  → ${block.name.replace("mcp__repo__", "")} ${target}`.trimEnd());
     }
   }
   return lines.length ? lines.join("\n") : undefined;
@@ -99,7 +101,7 @@ export async function runAgent(
 
   const prompt = buildPrompt(await loadPromptTemplate(), spec, config.writableDirs);
   for await (const message of query({ prompt, options })) {
-    const line = describeMessage(message);
+    const line = describeMessage(message, config.repoRoot);
     if (line) log(line);
 
     if (message.type === "result") {
