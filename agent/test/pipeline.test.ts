@@ -28,10 +28,13 @@ function setup({
   changed = ["demo-app/src/rate-limiter.ts", "demo-app/test/rate-limiter.test.ts"],
   checksPassed = true,
   dryRun = false,
-  contents = {} as Record<string, string>,
+  contents = {} as Record<string, string | undefined>,
+  tamperGit = false,
 } = {}) {
   let created = false;
+  let ran = false;
   const git = {
+    fingerprint: vi.fn(async () => (tamperGit && ran ? "changed" : "original")),
     currentBranch: vi.fn(async () => branch),
     changedFiles: vi.fn(async () => (created ? changed : dirty)),
     branchExists: vi.fn(async () => exists),
@@ -48,9 +51,9 @@ function setup({
     writableDirs: ["demo-app"],
     model: "claude-opus-5-5",
     dryRun,
-    runAgent: vi.fn(async () => agentRun),
+    runAgent: vi.fn(async () => ((ran = true), agentRun)),
     runChecks: vi.fn(async () => ({ passed: checksPassed, output: checksPassed ? "ok" : "1 test failed" })),
-    readFile: vi.fn(async (path: string) => contents[path] ?? "export {};"),
+    readFile: vi.fn(async (path: string) => (path in contents ? contents[path] : "export {};")),
     secrets: ["sk-test-value-from-the-env"],
     log: () => {},
   };
@@ -97,8 +100,27 @@ describe("runPipeline", () => {
 
   it("stops when the agent changed files outside its scope", async () => {
     const { deps, git } = setup({ changed: ["demo-app/src/a.ts", ".github/workflows/ci.yml"] });
-    await expect(runPipeline(deps)).rejects.toThrow(/outside demo-app:\n\.github\/workflows\/ci\.yml/);
+    await expect(runPipeline(deps)).rejects.toThrow(/outside demo-app or protected config files:\n\.github\/workflows\/ci\.yml/);
     expect(git.commit).not.toHaveBeenCalled();
+  });
+
+  it("stops when the files that define the checks changed, even inside the scope", async () => {
+    const { deps, git } = setup({ changed: ["demo-app/src/a.ts", "demo-app/package.json"] });
+    await expect(runPipeline(deps)).rejects.toThrow(/protected config files:\ndemo-app\/package\.json/);
+    expect(git.commit).not.toHaveBeenCalled();
+  });
+
+  it("stops before any further git command when .git/config or hooks changed during the run", async () => {
+    const { deps, git } = setup({ tamperGit: true });
+    await expect(runPipeline(deps)).rejects.toThrow(/\.git\/config or \.git\/hooks changed/);
+    expect(git.changedFiles).toHaveBeenCalledTimes(1); // only the preflight, before the agent ran
+    expect(git.commit).not.toHaveBeenCalled();
+  });
+
+  it("commits deletions without trying to scan the deleted file", async () => {
+    const { deps, git } = setup({ changed: ["demo-app/src/a.ts", "demo-app/test/old.test.ts"], contents: { "demo-app/test/old.test.ts": undefined } });
+    await expect(runPipeline(deps)).resolves.toMatchObject({ status: "opened" });
+    expect(git.commit).toHaveBeenCalledWith(["demo-app/src/a.ts", "demo-app/test/old.test.ts"], expect.any(String));
   });
 
   it("does not trust the agent: failing checks block the PR", async () => {

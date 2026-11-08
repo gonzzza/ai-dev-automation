@@ -24,9 +24,20 @@ export function repoRelative(repoRoot: string, target: string): string | null {
   return rel.replace(/\\/g, "/");
 }
 
+/**
+ * Files that define how the checks run: package scripts, dependencies, compiler, test and lint config.
+ * Changing them could turn the harness's own `npm run check` into a no-op, or make the
+ * agent-run tests run arbitrary scripts, so they stay off limits even inside the scope.
+ */
+const PROTECTED_CONFIG = /^(package(-lock)?\.json|\.npmrc|tsconfig.*\.json|(vitest|vite|eslint)\.config\.[cm]?[jt]s|\.eslintrc.*)$/;
+
+export function isProtectedConfig(path: string): boolean {
+  return PROTECTED_CONFIG.test(path.split("/").pop() ?? "");
+}
+
 export function isWritable(path: string, writableDirs: string[]): boolean {
   const segments = path.split("/");
-  if (segments.includes("node_modules") || segments.includes(".git")) return false;
+  if (segments.includes("node_modules") || segments.includes(".git") || isProtectedConfig(path)) return false;
   return writableDirs.some((dir) => path.startsWith(`${dir.replace(/\/+$/, "")}/`));
 }
 
@@ -59,6 +70,9 @@ export function decide(toolName: string, input: Record<string, unknown>, { repoR
     // "**/.env*" or "*.pem": the glob's file name, wildcards removed, must not name a secret file either.
     if (typeof glob === "string" && isSecretFile((glob.split(/[\\/]/).pop() ?? "").replace(/[*?[\]{}]/g, ""))) {
       return deny(`${glob} matches files that may hold credentials, which are off limits.`);
+    }
+    if (WRITE_TOOLS.has(toolName) && isProtectedConfig(path)) {
+      return deny(`${path} configures how the checks run and cannot be changed by the agent. If the spec needs it, say so in your notes.`);
     }
     if (WRITE_TOOLS.has(toolName) && !isWritable(path, writableDirs)) {
       return deny(`Writing ${path} is not allowed. You may only change files under: ${writableDirs.join(", ")}.`);

@@ -76,7 +76,7 @@ async function main(): Promise<void> {
     dryRun: values["dry-run"],
     runAgent: (s) => runAgent(s, config, exec),
     runChecks: () => runChecks(exec, repoRoot, config.checksEnv),
-    readFile: (path) => readFile(resolve(repoRoot, path), "utf8"),
+    readFile: (path) => (existsSync(resolve(repoRoot, path)) ? readFile(resolve(repoRoot, path), "utf8") : Promise.resolve(undefined)),
     secrets: secretValues(process.env),
     log: console.log,
   });

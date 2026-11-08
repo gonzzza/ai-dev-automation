@@ -1,4 +1,5 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { run, type Exec } from "./exec.js";
@@ -26,8 +27,25 @@ export class Git {
     private readonly cwd: string,
   ) {}
 
+  /**
+   * Every harness git command runs with credentials, after agent-written code has run. Hooks and
+   * fsmonitor are turned off so nothing planted in the repo can run then; fingerprint() catches
+   * other config changes. /dev/null works for hooksPath on Git for Windows too.
+   */
+  private static readonly SAFE = ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"];
+
   private git(...args: string[]) {
-    return run(this.exec, "git", args, this.cwd);
+    return run(this.exec, "git", [...Git.SAFE, ...args], this.cwd);
+  }
+
+  async fingerprint(): Promise<string> {
+    const gitDir = await this.git("rev-parse", "--absolute-git-dir");
+    const read = (path: string) => readFile(path, "utf8").catch(() => "<missing>");
+    const hooksDir = join(gitDir, "hooks");
+    const hooks = await readdir(hooksDir).catch(() => [] as string[]);
+    const parts = [`config\n${await read(join(gitDir, "config"))}`];
+    for (const name of hooks.sort()) parts.push(`hooks/${name}\n${await read(join(hooksDir, name))}`);
+    return createHash("sha256").update(parts.join("\0")).digest("hex");
   }
 
   currentBranch() {
@@ -37,17 +55,17 @@ export class Git {
   /** Paths with uncommitted changes, including untracked files. */
   async changedFiles(): Promise<string[]> {
     // Not run(): it trims, and the leading space of " M path" is part of the status format.
-    const result = await this.exec("git", ["status", "--porcelain=v1", "-z", "--untracked-files=all"], { cwd: this.cwd });
+    const result = await this.exec("git", [...Git.SAFE, "status", "--porcelain=v1", "-z", "--untracked-files=all"], { cwd: this.cwd });
     if (result.code !== 0) throw new Error(`git status failed (exit ${result.code}):\n${result.stderr}`);
     return parsePorcelainZ(result.stdout);
   }
 
   /** Locally or on origin: a leftover remote branch would only fail at push time, after the agent has run. */
   async branchExists(name: string): Promise<boolean> {
-    const local = await this.exec("git", ["rev-parse", "--verify", "--quiet", `refs/heads/${name}`], { cwd: this.cwd });
+    const local = await this.exec("git", [...Git.SAFE, "rev-parse", "--verify", "--quiet", `refs/heads/${name}`], { cwd: this.cwd });
     if (local.code === 0) return true;
     // Exit 2 means no matching branch; any other failure (no origin, offline) surfaces later at push.
-    const remote = await this.exec("git", ["ls-remote", "--exit-code", "--heads", "origin", name], { cwd: this.cwd });
+    const remote = await this.exec("git", [...Git.SAFE, "ls-remote", "--exit-code", "--heads", "origin", name], { cwd: this.cwd });
     return remote.code === 0;
   }
 
@@ -57,11 +75,11 @@ export class Git {
 
   async commit(files: string[], message: string): Promise<void> {
     await this.git("add", "--", ...files);
-    await withTempFile(message, (path) => this.git("commit", "-F", path));
+    await withTempFile(message, (path) => this.git("commit", "--no-verify", "-F", path));
   }
 
   push(branch: string) {
-    return this.git("push", "-u", "origin", branch);
+    return this.git("push", "--no-verify", "-u", "origin", branch);
   }
 
   /** Opens the PR with gh and returns its URL. */

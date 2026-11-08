@@ -15,6 +15,8 @@ export interface GitOps {
   push(branch: string): Promise<unknown>;
   openPullRequest(title: string, body: string, base: string, head: string): Promise<string>;
   repoUrl(): Promise<string | undefined>;
+  /** Contents of .git/config and .git/hooks, to detect tampering during the run. */
+  fingerprint(): Promise<string>;
 }
 
 export interface PipelineDeps {
@@ -26,8 +28,8 @@ export interface PipelineDeps {
   dryRun: boolean;
   runAgent(spec: Spec): Promise<AgentRun>;
   runChecks(): Promise<CheckResult>;
-  /** Reads a repo-relative file, for the secret scan. */
-  readFile(path: string): Promise<string>;
+  /** Reads a repo-relative file for the secret scan; undefined if it was deleted. */
+  readFile(path: string): Promise<string | undefined>;
   /** Credential values from the environment that must never be committed. */
   secrets: string[];
   log(line: string): void;
@@ -55,25 +57,39 @@ export async function runPipeline(deps: PipelineDeps): Promise<PipelineResult> {
   await git.createBranch(branch);
   log(`Created ${branch}. Running the agent on ${spec.path}...`);
 
+  // Hooks and config under .git are invisible to git status, and agent-written tests could plant them.
+  const gitStateBefore = await git.fingerprint();
+
   const run = await deps.runAgent(spec);
   log(`Agent finished in ${run.turns} turns, $${run.costUsd.toFixed(2)}.`);
 
-  // Gate 1: the agent changed something, and only inside its scope.
-  const files = await git.changedFiles();
-  if (files.length === 0) throw new Error("The agent made no changes.");
-  const outside = files.filter((f) => !isWritable(f, writableDirs));
-  if (outside.length) throw new Error(`The agent changed files outside ${writableDirs.join(", ")}:\n${outside.join("\n")}`);
-
-  // Gate 2: don't trust the agent's own report; run the checks again.
+  // Gate 1: don't trust the agent's own report; run the checks again.
   log("Verifying with npm run check...");
   const checks = await deps.runChecks();
   if (!checks.passed) throw new Error(`Checks failed after the agent finished. Branch ${branch} kept for inspection.\n\n${checks.output}`);
 
+  // The checks run agent-written code too, so everything below inspects the tree after they ran.
+  // Gate 2: .git is exactly as it was, so the commit and push below run no planted hooks or config.
+  if ((await git.fingerprint()) !== gitStateBefore) {
+    throw new Error(`.git/config or .git/hooks changed during the run. Nothing was committed; inspect them before using branch ${branch}.`);
+  }
+
+  // Gate 3: the agent changed something, and only inside its scope, never the files that define the checks.
+  const files = await git.changedFiles();
+  if (files.length === 0) throw new Error("The agent made no changes.");
+  const outside = files.filter((f) => !isWritable(f, writableDirs));
+  if (outside.length) {
+    throw new Error(`The agent changed files outside ${writableDirs.join(", ")} or protected config files:\n${outside.join("\n")}`);
+  }
+
   const body = prBody({ spec, run, files, model: deps.model, base, repoUrl: await git.repoUrl() });
 
-  // Gate 3: nothing that looks like a credential gets committed or posted, however it got there.
+  // Gate 4: nothing that looks like a credential gets committed or posted, however it got there.
   const texts: [string, string][] = [["the PR body", body]];
-  for (const file of files) texts.push([file, await deps.readFile(file)]);
+  for (const file of files) {
+    const text = await deps.readFile(file);
+    if (text !== undefined) texts.push([file, text]); // undefined: deleted, nothing to scan
+  }
   for (const [where, text] of texts) {
     const found = findSecrets(text, deps.secrets);
     if (found.length) {

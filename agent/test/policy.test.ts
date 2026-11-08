@@ -23,6 +23,14 @@ describe("decide", () => {
     expect(allowed("Read", { file_path: ".env.example" })).toBe(true);
   });
 
+  it("denies writes to the files that define how the checks run, even inside the scope", () => {
+    for (const file of ["package.json", "package-lock.json", "tsconfig.json", "tsconfig.build.json", "vitest.config.ts", "eslint.config.js"]) {
+      expect(allowed("Write", { file_path: `demo-app/${file}` })).toBe(false);
+    }
+    expect(decide("Edit", { file_path: "demo-app/package.json" }, options)).toMatchObject({ message: expect.stringContaining("configures how the checks run") });
+    expect(allowed("Read", { file_path: "demo-app/package.json" })).toBe(true);
+  });
+
   it("allows writes only inside the writable dirs", () => {
     expect(allowed("Write", { file_path: resolve(repoRoot, "demo-app/src/limiter.ts") })).toBe(true);
     expect(allowed("Edit", { file_path: "demo-app/README.md" })).toBe(true);
