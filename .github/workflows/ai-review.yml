@@ -1,0 +1,27 @@
+name: AI review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: ai-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  review:
+    if: ${{ !github.event.pull_request.draft }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # Runs the action from this checkout, so every PR exercises the current code.
+      # Other repos use: gonzzza/ai-dev-automation/review-action@v1
+      - uses: actions/checkout@v7
+      - uses: ./review-action
+        with:
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          fail-on: none

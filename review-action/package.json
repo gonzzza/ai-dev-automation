@@ -1,0 +1,21 @@
+{
+  "name": "review-action",
+  "version": "1.0.0",
+  "private": true,
+  "description": "GitHub Action: AI code review of pull requests with Claude.",
+  "type": "module",
+  "scripts": {
+    "build": "esbuild src/main.ts --bundle --platform=node --target=node24 --format=esm --outfile=dist/index.js --legal-comments=none --banner:js=\"import { createRequire as __cr } from 'node:module'; const require = __cr(import.meta.url);\"",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "esbuild": "^0.28.2"
+  },
+  "dependencies": {
+    "@actions/core": "^3.0.1",
+    "@actions/github": "^9.1.1",
+    "@anthropic-ai/sdk": "^1.6.0",
+    "zod": "^4.6.7"
+  }
+}
