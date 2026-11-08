@@ -1,0 +1,34 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - name: Lint, typecheck, test
+        run: npm run check
+      - name: Check review-action/dist is up to date
+        run: |
+          npm run build -w review-action
+          # status --porcelain also catches new untracked build output, not just modified files.
+          if [ -n "$(git status --porcelain -- review-action/dist)" ]; then
+            echo "::error::review-action/dist is stale. Run 'npm run build -w review-action' and commit the result."
+            exit 1
+          fi

@@ -1,0 +1,39 @@
+name: "AI Code Review (Claude)"
+description: "Reviews a pull request diff with Claude and posts inline comments on bugs, security issues and missing tests."
+author: "Gonzalo Villar"
+branding:
+  icon: "eye"
+  color: "orange"
+
+inputs:
+  anthropic-api-key:
+    description: "Anthropic API key. Pass it from a secret. If empty (e.g. PRs from forks), the review is skipped with a warning."
+    required: true
+  github-token:
+    description: "Token used to read the PR and post the review. Needs `pull-requests: write`."
+    default: ${{ github.token }}
+  model:
+    description: "Claude model ID."
+    default: "claude-opus-5-5"
+  effort:
+    description: "Reasoning effort: low, medium, high, xhigh or max."
+    default: "high"
+  fail-on:
+    description: "Fail the check when a finding is at or above this severity: none, low, medium, high or critical."
+    default: "none"
+  max-diff-chars:
+    description: "Budget for the diff sent to the model, in characters. Files beyond it are listed as not reviewed."
+    default: "400000"
+  exclude:
+    description: "Extra glob patterns to skip, one per line. Lockfiles, dist/, *.map, *.snap and *.min.js are always skipped."
+    default: ""
+
+outputs:
+  findings:
+    description: "Number of findings."
+  highest-severity:
+    description: "Highest severity found, or `none`."
+
+runs:
+  using: "node24"
+  main: "dist/index.js"
