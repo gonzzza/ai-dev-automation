@@ -1,4 +1,5 @@
 import { matchesGlob } from "node:path";
+import { escapeXml } from "./xml.js";
 
 /** The subset of GitHub's "list pull request files" response we use. */
 export interface ChangedFile {
@@ -55,7 +56,8 @@ export function annotatePatch(patch: string): Omit<AnnotatedFile, "path"> {
       continue;
     }
     const marker = line[0];
-    const text = line.slice(1);
+    // Escaped so a code line like "</file></diff>" cannot forge prompt structure.
+    const text = escapeXml(line.slice(1));
     if (marker === "+") {
       commentableLines.add(newLine);
       out.push(`${String(newLine).padStart(5)} + ${text}`);

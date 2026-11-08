@@ -3,6 +3,18 @@ import { bySeverityDesc, SEVERITIES, type Category, type Finding, type Review } 
 
 export const REVIEW_MARKER = "<!-- ai-dev-automation:review -->";
 
+/** Skipped files listed by name in the summary; the rest are counted. */
+export const MAX_LISTED_SKIPPED = 50;
+
+/** GitHub rejects review and comment bodies over 65,536 characters. Leave headroom. */
+export const MAX_BODY_CHARS = 60_000;
+
+/** Keep a body under GitHub's size limit, saying so when it had to cut. */
+export function fitBody(body: string): string {
+  if (body.length <= MAX_BODY_CHARS) return body;
+  return `${body.slice(0, MAX_BODY_CHARS)}\n\n_…truncated to fit GitHub's comment size limit._`;
+}
+
 const CATEGORY_LABEL: Record<Category, string> = {
   bug: "🐛 Bug",
   security: "🔒 Security",
@@ -76,11 +88,9 @@ export function renderSummary(
     parts.push("### Findings outside the diff", unanchored.map(renderFindingListItem).join("\n"));
   }
   if (skipped.length) {
-    parts.push(
-      `<details><summary>Files not reviewed (${skipped.length})</summary>\n\n` +
-        skipped.map((s) => `- \`${s.path}\`: ${s.reason}`).join("\n") +
-        "\n</details>",
-    );
+    const listed = skipped.slice(0, MAX_LISTED_SKIPPED).map((s) => `- \`${s.path}\`: ${s.reason}`);
+    if (skipped.length > MAX_LISTED_SKIPPED) listed.push(`- …and ${skipped.length - MAX_LISTED_SKIPPED} more`);
+    parts.push(`<details><summary>Files not reviewed (${skipped.length})</summary>\n\n${listed.join("\n")}\n</details>`);
   }
   const n = (x: number) => x.toLocaleString("en-US");
   parts.push(

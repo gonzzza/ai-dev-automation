@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { annotatePatch } from "../src/diff.js";
-import { anchorFindings, renderSummary, REVIEW_MARKER } from "../src/render.js";
+import { anchorFindings, fitBody, MAX_BODY_CHARS, renderSummary, REVIEW_MARKER } from "../src/render.js";
 import type { Finding } from "../src/schema.js";
 
 const file = { path: "src/a.ts", ...annotatePatch("@@ -1,1 +1,2 @@\n line one\n+line two") };
@@ -37,6 +37,16 @@ describe("anchorFindings", () => {
   });
 });
 
+describe("fitBody", () => {
+  it("leaves normal bodies alone and visibly truncates huge ones", () => {
+    expect(fitBody("short")).toBe("short");
+    const fitted = fitBody("x".repeat(100_000));
+    expect(fitted.length).toBeLessThan(65_536);
+    expect(fitted.length).toBeGreaterThan(MAX_BODY_CHARS);
+    expect(fitted).toMatch(/truncated to fit/);
+  });
+});
+
 describe("renderSummary", () => {
   const meta = { model: "claude-opus-5-5", inputTokens: 12345, outputTokens: 678, reviewedFiles: 1 };
 
@@ -52,6 +62,15 @@ describe("renderSummary", () => {
     expect(body).toContain("- `src/a.ts:99` **🐛 Bug · medium**: Off by one Loop skips the last item.");
     expect(body).toContain("Files not reviewed (1)");
     expect(body).toContain("12,345 in / 678 out tokens");
+  });
+
+  it("lists at most 50 skipped files and counts the rest", () => {
+    const skipped = Array.from({ length: 1000 }, (_, i) => ({ path: `gen/${i}.json`, reason: "excluded by pattern" }));
+    const body = renderSummary({ summary: "s", findings: [] }, [], skipped, meta);
+    expect(body).toContain("Files not reviewed (1000)");
+    expect(body).toContain("`gen/49.json`");
+    expect(body).not.toContain("`gen/50.json`");
+    expect(body).toContain("…and 950 more");
   });
 
   it("says so when the PR is clean", () => {

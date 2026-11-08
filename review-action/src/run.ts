@@ -20,6 +20,8 @@ export interface PullRequestPayload {
   number: number;
   title?: unknown;
   body?: unknown;
+  /** Total files in the PR, which can exceed what the files API lists (3,000). */
+  changed_files?: number;
   head: { sha: string };
 }
 
@@ -55,6 +57,10 @@ export async function run({ io, repo: { owner, repo }, pullRequest: pr, createOc
   const octokit = createOctokit(io.getInput("github-token"));
   const files = await octokit.paginate(octokit.rest.pulls.listFiles, { owner, repo, pull_number: pr.number, per_page: 100 });
   const { included, skipped } = selectFiles(files, { exclude, maxChars });
+  const unlisted = (pr.changed_files ?? 0) - files.length;
+  if (unlisted > 0) {
+    skipped.push({ path: `${unlisted} more file(s)`, reason: `not listed: GitHub's API returns at most ${files.length} files per PR` });
+  }
   io.info(`Reviewing ${included.length} file(s), skipping ${skipped.length}.`);
   if (included.length === 0) {
     io.info("Nothing to review.");

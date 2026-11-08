@@ -1,5 +1,5 @@
 import type { getOctokit } from "@actions/github";
-import { renderFindingListItem, REVIEW_MARKER, type InlineComment } from "./render.js";
+import { fitBody, renderFindingListItem, REVIEW_MARKER, type InlineComment } from "./render.js";
 import type { Finding } from "./schema.js";
 
 export type Octokit = ReturnType<typeof getOctokit>;
@@ -43,13 +43,18 @@ export async function publishReview(
     event: "COMMENT" as const,
   };
   try {
-    const { data } = await octokit.rest.pulls.createReview({ ...base, body: summary, comments: inline });
+    const { data } = await octokit.rest.pulls.createReview({
+      ...base,
+      body: fitBody(summary),
+      comments: inline.map((c) => ({ ...c, body: fitBody(c.body) })),
+    });
     return { mode: "inline", reviewId: data.id, author: data.user?.login ?? null };
   } catch (error) {
+    // Bodies are size-capped above, so a 422 here means GitHub could not anchor an inline comment.
     if ((error as { status?: number }).status !== 422 || inline.length === 0) throw error;
     const { data } = await octokit.rest.pulls.createReview({
       ...base,
-      body: `${summary}\n\n### Inline findings\n\n${anchored.map(renderFindingListItem).join("\n")}`,
+      body: fitBody(`${summary}\n\n### Inline findings\n\n${anchored.map(renderFindingListItem).join("\n")}`),
     });
     return { mode: "body-only", reviewId: data.id, author: data.user?.login ?? null };
   }

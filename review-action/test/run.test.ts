@@ -119,6 +119,13 @@ describe("run", () => {
     expect(outputs).toEqual({ findings: "0", "highest-severity": "none" });
   });
 
+  it("reports files beyond what GitHub's files API lists", async () => {
+    const { deps, pulls } = setup();
+    deps.pullRequest = { ...deps.pullRequest!, changed_files: 3500 };
+    await run(deps);
+    expect(pulls.createReview.mock.calls[0]![0].body).toContain("3499 more file(s)");
+  });
+
   it("fails the check when a finding meets fail-on", async () => {
     const { deps, io } = setup({ inputs: { "fail-on": "high" } });
     await run(deps);
