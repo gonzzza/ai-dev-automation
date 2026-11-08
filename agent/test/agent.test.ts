@@ -1,6 +1,6 @@
 import type { SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { describe, expect, it } from "vitest";
-import { buildPrompt, describeMessage, loadPromptTemplate } from "../src/agent.js";
+import { AGENT_REPORT_JSON_SCHEMA, buildPrompt, describeMessage, loadPromptTemplate } from "../src/agent.js";
 import { parseSpec } from "../src/spec.js";
 
 const spec = parseSpec("specs/002-x.md", "# X\n\n## Goal\ng\n\n## Requirements\nr\n\n## Acceptance criteria\na\n");
@@ -42,5 +42,12 @@ describe("describeMessage", () => {
     } as unknown as SDKMessage;
     expect(describeMessage(message)).toBe("  → Read demo-app/src/retry.ts\n  → run_checks");
     expect(describeMessage({ type: "system" } as unknown as SDKMessage)).toBeUndefined();
+  });
+});
+
+describe("AGENT_REPORT_JSON_SCHEMA", () => {
+  it("is draft-07, which the Claude Code CLI accepts, and requires every report field", () => {
+    expect(AGENT_REPORT_JSON_SCHEMA.$schema).toBe("http://json-schema.org/draft-07/schema#");
+    expect(AGENT_REPORT_JSON_SCHEMA.required).toEqual(["plan", "summary", "testing", "checksPassed", "notes"]);
   });
 });

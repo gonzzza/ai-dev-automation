@@ -16,6 +16,9 @@ export const AgentReportSchema = z.object({
 });
 export type AgentReport = z.infer<typeof AgentReportSchema>;
 
+/** Draft-07, because the Claude Code CLI validates --json-schema with a draft-07 validator and rejects 2020-12. */
+export const AGENT_REPORT_JSON_SCHEMA = z.toJSONSchema(AgentReportSchema, { target: "draft-7" }) as Record<string, unknown>;
+
 export interface AgentConfig {
   repoRoot: string;
   writableDirs: string[];
@@ -90,7 +93,7 @@ export async function runAgent(
     // Every call that isn't pre-approved goes through the policy; nothing is pre-approved.
     permissionMode: "default",
     canUseTool: createToolPolicy({ repoRoot: config.repoRoot, writableDirs: config.writableDirs }),
-    outputFormat: { type: "json_schema", schema: z.toJSONSchema(AgentReportSchema) as Record<string, unknown> },
+    outputFormat: { type: "json_schema", schema: AGENT_REPORT_JSON_SCHEMA },
     persistSession: false,
   };
 
