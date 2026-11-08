@@ -1,5 +1,5 @@
 import { isAbsolute, relative, resolve } from "node:path";
-import type { CanUseTool, PermissionResult } from "@anthropic-ai/claude-agent-sdk";
+import type { CanUseTool, HookCallback, PermissionResult } from "@anthropic-ai/claude-agent-sdk";
 import { isSecretFile } from "./secrets.js";
 
 export const CHECKS_TOOL = "mcp__repo__run_checks";
@@ -56,6 +56,10 @@ export function decide(toolName: string, input: Record<string, unknown>, { repoR
       return deny(`File globs must stay inside the repository: ${glob}`);
     }
     if (isSecretFile(path)) return deny(`${path} may hold credentials and is off limits.`);
+    // "**/.env*" or "*.pem": the glob's file name, wildcards removed, must not name a secret file either.
+    if (typeof glob === "string" && isSecretFile((glob.split(/[\\/]/).pop() ?? "").replace(/[*?[\]{}]/g, ""))) {
+      return deny(`${glob} matches files that may hold credentials, which are off limits.`);
+    }
     if (WRITE_TOOLS.has(toolName) && !isWritable(path, writableDirs)) {
       return deny(`Writing ${path} is not allowed. You may only change files under: ${writableDirs.join(", ")}.`);
     }
@@ -67,4 +71,18 @@ export function decide(toolName: string, input: Record<string, unknown>, { repoR
 
 export function createToolPolicy(options: PolicyOptions): CanUseTool {
   return async (toolName, input) => decide(toolName, input, options);
+}
+
+/**
+ * The same policy as a PreToolUse hook. canUseTool only runs when Claude Code would otherwise
+ * prompt, and it may auto-approve reads inside the working directory without asking, so the
+ * hook is what guarantees every call is checked. Allowed calls fall through to the normal flow.
+ */
+export function createPolicyHook(options: PolicyOptions): HookCallback {
+  return async (input) => {
+    if (input.hook_event_name !== "PreToolUse") return {};
+    const result = decide(input.tool_name, (input.tool_input ?? {}) as Record<string, unknown>, options);
+    if (result.behavior !== "deny") return {};
+    return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: result.message } };
+  };
 }

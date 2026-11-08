@@ -46,8 +46,9 @@ spec.md ─▶ preflight ─▶ branch agent/<spec> ─▶ agent loop ─▶ sco
 The agent's tools are limited in code, so the limits don't depend on the model following its instructions:
 
 - **No shell.** It has only `Read`, `Write`, `Edit`, `Glob` and `Grep`. To run lint, typecheck and tests it calls `run_checks`, a tool served by an in-process MCP server that runs one fixed command.
-- **Permission policy** ([`src/policy.ts`](src/policy.ts)). Every tool call goes through `canUseTool`:
-  - Reads are allowed only inside the repo, and never in files that may hold credentials (`.env*` other than `.env.example`, `CLAUDE.local.md`, `.npmrc`, key files).
+- **Permission policy** ([`src/policy.ts`](src/policy.ts)). It runs as a `PreToolUse` hook, which sees every tool call. (`canUseTool` alone isn't enough, because Claude Code can approve reads inside the working directory without calling it.) The rules:
+  - Reads are allowed only inside the repo.
+  - No path or glob may name a file that can hold credentials: `.env*` other than `.env.example`, `CLAUDE.local.md`, `.npmrc`, key files. A directory-wide Grep can still match such a file, and the secret scan below is there for that case.
   - Writes are allowed only inside `--scope`, and never in `node_modules` or `.git`.
   - Every other call is denied. The reason goes back to the model so it can correct course.
 - **No credentials in the checks.** `run_checks` gets an environment without the API key, tokens or passwords, and `gh` is logged out.

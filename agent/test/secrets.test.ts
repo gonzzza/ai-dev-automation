@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { parseLimit } from "../src/args.js";
+import { resolve } from "node:path";
+import { parseLimit, scopeDir } from "../src/args.js";
 import { checksEnv, findSecrets, isSecretFile, secretValues } from "../src/secrets.js";
 
 const env = {
@@ -47,5 +48,18 @@ describe("parseLimit", () => {
     expect(parseLimit("--max-turns", "60", { integer: true })).toBe(60);
     for (const raw of ["", "ten", "5$", "0", "-1", "NaN", "Infinity"]) expect(() => parseLimit("--max-budget", raw)).toThrow("--max-budget");
     expect(() => parseLimit("--max-turns", "1.5", { integer: true })).toThrow("positive integer");
+  });
+});
+
+describe("scopeDir", () => {
+  const root = resolve("/repo");
+  it("normalizes relative, trailing-slash and absolute forms to a repo-relative dir", () => {
+    for (const dir of ["demo-app", "./demo-app", "demo-app/", resolve(root, "demo-app")]) expect(scopeDir(root, root, dir)).toBe("demo-app");
+    expect(scopeDir(root, resolve(root, "agent"), "../demo-app/src")).toBe("demo-app/src");
+  });
+
+  it("rejects the repo root and paths outside the repo", () => {
+    expect(() => scopeDir(root, root, ".")).toThrow("not the repository root");
+    expect(() => scopeDir(root, root, "../elsewhere")).toThrow("outside the repository");
   });
 });

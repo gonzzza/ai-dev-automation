@@ -5,7 +5,7 @@ import { query, type Options, type SDKMessage } from "@anthropic-ai/claude-agent
 import { z } from "zod";
 import { createChecksServer } from "./checks.js";
 import type { Exec } from "./exec.js";
-import { AGENT_TOOLS, CHECKS_TOOL, createToolPolicy } from "./policy.js";
+import { AGENT_TOOLS, CHECKS_TOOL, createPolicyHook, createToolPolicy } from "./policy.js";
 import type { Spec } from "./spec.js";
 
 export const AgentReportSchema = z.object({
@@ -83,6 +83,7 @@ export async function runAgent(
   exec: Exec,
   log: (line: string) => void = console.log,
 ): Promise<AgentRun> {
+  const policy = { repoRoot: config.repoRoot, writableDirs: config.writableDirs };
   const options: Options = {
     cwd: config.repoRoot,
     model: config.model,
@@ -94,9 +95,11 @@ export async function runAgent(
     systemPrompt: { type: "preset", preset: "claude_code" },
     tools: AGENT_TOOLS,
     mcpServers: { repo: createChecksServer(exec, config.repoRoot, config.checksEnv) },
-    // Every call that isn't pre-approved goes through the policy; nothing is pre-approved.
+    // The policy runs as a PreToolUse hook, which sees every tool call, and again as canUseTool for
+    // anything Claude Code would otherwise prompt for. Nothing is pre-approved.
     permissionMode: "default",
-    canUseTool: createToolPolicy({ repoRoot: config.repoRoot, writableDirs: config.writableDirs }),
+    hooks: { PreToolUse: [{ hooks: [createPolicyHook(policy)] }] },
+    canUseTool: createToolPolicy(policy),
     outputFormat: { type: "json_schema", schema: AGENT_REPORT_JSON_SCHEMA },
     persistSession: false,
   };

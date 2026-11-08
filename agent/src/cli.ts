@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { relative, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { runAgent, type AgentConfig } from "./agent.js";
-import { parseLimit } from "./args.js";
+import { parseLimit, scopeDir } from "./args.js";
 import { runChecks } from "./checks.js";
 import { exec, run } from "./exec.js";
 import { Git } from "./git.js";
@@ -58,7 +58,7 @@ async function main(): Promise<void> {
   if (!["low", "medium", "high", "xhigh", "max"].includes(effort)) throw new Error(`Invalid --effort: ${effort}`);
   const config: AgentConfig = {
     repoRoot,
-    writableDirs: values.scope.map((d) => d.replace(/\\/g, "/").replace(/\/+$/, "")),
+    writableDirs: values.scope.map((dir) => scopeDir(repoRoot, userCwd, dir)),
     model: values.model,
     effort,
     maxTurns: parseLimit("--max-turns", values["max-turns"], { integer: true }),

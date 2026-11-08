@@ -38,14 +38,17 @@ export class Git {
   async changedFiles(): Promise<string[]> {
     // Not run(): it trims, and the leading space of " M path" is part of the status format.
     const result = await this.exec("git", ["status", "--porcelain=v1", "-z", "--untracked-files=all"], { cwd: this.cwd });
-    if (result.code !== 0) throw new Error(`git status failed (exit ${result.code}):
-${result.stderr}`);
+    if (result.code !== 0) throw new Error(`git status failed (exit ${result.code}):\n${result.stderr}`);
     return parsePorcelainZ(result.stdout);
   }
 
+  /** Locally or on origin: a leftover remote branch would only fail at push time, after the agent has run. */
   async branchExists(name: string): Promise<boolean> {
     const local = await this.exec("git", ["rev-parse", "--verify", "--quiet", `refs/heads/${name}`], { cwd: this.cwd });
-    return local.code === 0;
+    if (local.code === 0) return true;
+    // Exit 2 means no matching branch; any other failure (no origin, offline) surfaces later at push.
+    const remote = await this.exec("git", ["ls-remote", "--exit-code", "--heads", "origin", name], { cwd: this.cwd });
+    return remote.code === 0;
   }
 
   createBranch(name: string) {

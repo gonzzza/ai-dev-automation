@@ -1,6 +1,7 @@
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { CHECKS_TOOL, decide, isWritable, repoRelative } from "../src/policy.js";
+import type { HookInput } from "@anthropic-ai/claude-agent-sdk";
+import { CHECKS_TOOL, createPolicyHook, decide, isWritable, repoRelative } from "../src/policy.js";
 
 const repoRoot = resolve("/repo");
 const options = { repoRoot, writableDirs: ["demo-app"] };
@@ -68,5 +69,33 @@ describe("repoRelative", () => {
     expect(repoRelative(repoRoot, resolve(repoRoot, "demo-app", "src"))).toBe("demo-app/src");
     expect(repoRelative(repoRoot, repoRoot)).toBe(".");
     expect(repoRelative(repoRoot, resolve(repoRoot, ".."))).toBeNull();
+  });
+});
+
+describe("createPolicyHook", () => {
+  const hook = createPolicyHook(options);
+  const call = (tool_name: string, tool_input: Record<string, unknown>) =>
+    hook({ hook_event_name: "PreToolUse", tool_name, tool_input, tool_use_id: "1" } as unknown as HookInput, "1", {
+      signal: new AbortController().signal,
+    });
+
+  it("denies, with the reason, calls the policy denies, even reads Claude Code might auto-approve", async () => {
+    expect(await call("Read", { file_path: resolve(repoRoot, ".env") })).toEqual({
+      hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: ".env may hold credentials and is off limits." },
+    });
+  });
+
+  it("lets allowed calls fall through to the normal permission flow", async () => {
+    expect(await call("Read", { file_path: "demo-app/src/retry.ts" })).toEqual({});
+    expect(await call(CHECKS_TOOL, {})).toEqual({});
+  });
+});
+
+describe("secret globs", () => {
+  it("denies Glob patterns and Grep globs that target credential files", () => {
+    expect(allowed("Glob", { pattern: "**/.env*" })).toBe(false);
+    expect(allowed("Grep", { pattern: "KEY", path: ".", glob: "**/.npmrc" })).toBe(false);
+    expect(allowed("Grep", { pattern: "BEGIN", glob: "*.pem" })).toBe(false);
+    expect(allowed("Grep", { pattern: "env", glob: "**/*.ts" })).toBe(true);
   });
 });
