@@ -1,13 +1,16 @@
 #!/usr/bin/env node
 import { existsSync } from "node:fs";
-import { readFile } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { relative, resolve } from "node:path";
 import { parseArgs } from "node:util";
 import { runAgent, type AgentConfig } from "./agent.js";
+import { parseLimit } from "./args.js";
 import { runChecks } from "./checks.js";
 import { exec, run } from "./exec.js";
 import { Git } from "./git.js";
 import { runPipeline } from "./pipeline.js";
+import { checksEnv, secretValues } from "./secrets.js";
 import { parseSpec } from "./spec.js";
 
 const USAGE = `Usage: npm run agent -- <spec.md> [options]
@@ -58,8 +61,10 @@ async function main(): Promise<void> {
     writableDirs: values.scope.map((d) => d.replace(/\\/g, "/").replace(/\/+$/, "")),
     model: values.model,
     effort,
-    maxTurns: Number(values["max-turns"]),
-    maxBudgetUsd: Number(values["max-budget"]),
+    maxTurns: parseLimit("--max-turns", values["max-turns"], { integer: true }),
+    maxBudgetUsd: parseLimit("--max-budget", values["max-budget"]),
+    // run_checks executes code the agent wrote, so it gets no credentials and a logged-out gh.
+    checksEnv: checksEnv(process.env, await mkdtemp(resolve(tmpdir(), "agent-gh-"))),
   };
 
   const result = await runPipeline({
@@ -70,7 +75,9 @@ async function main(): Promise<void> {
     model: config.model,
     dryRun: values["dry-run"],
     runAgent: (s) => runAgent(s, config, exec),
-    runChecks: () => runChecks(exec, repoRoot),
+    runChecks: () => runChecks(exec, repoRoot, config.checksEnv),
+    readFile: (path) => readFile(resolve(repoRoot, path), "utf8"),
+    secrets: secretValues(process.env),
     log: console.log,
   });
 

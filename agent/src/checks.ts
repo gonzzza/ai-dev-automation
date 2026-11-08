@@ -6,17 +6,20 @@ export interface CheckResult {
   output: string;
 }
 
-/** Lint, typecheck and test the whole repo: the same gate CI applies. */
-export async function runChecks(exec: Exec, repoRoot: string): Promise<CheckResult> {
-  const result = await exec("npm", ["run", "check"], { cwd: repoRoot });
+/**
+ * Lint, typecheck and test the whole repo: the same gate CI applies. This runs code the agent
+ * wrote (tests are code), so pass `env` without credentials; see checksEnv().
+ */
+export async function runChecks(exec: Exec, repoRoot: string, env?: NodeJS.ProcessEnv): Promise<CheckResult> {
+  const result = await exec("npm", ["run", "check"], { cwd: repoRoot, env });
   return { passed: result.code === 0, output: tail(`${result.stdout}\n${result.stderr}`.trim(), 20_000) };
 }
 
 /**
- * In-process MCP server exposing one tool, run_checks. The agent has no shell,
- * so this fixed command is the only way it can execute anything.
+ * In-process MCP server exposing one tool, run_checks. The agent has no shell, so this fixed
+ * command is the only thing it can start, though the tests it runs are code the agent wrote.
  */
-export function createChecksServer(exec: Exec, repoRoot: string) {
+export function createChecksServer(exec: Exec, repoRoot: string, env?: NodeJS.ProcessEnv) {
   return createSdkMcpServer({
     name: "repo",
     version: "1.0.0",
@@ -27,10 +30,9 @@ export function createChecksServer(exec: Exec, repoRoot: string) {
           "Returns PASSED or FAILED with the output tail. Call it after making changes, and again after each fix, until it passes.",
         {},
         async () => {
-          const { passed, output } = await runChecks(exec, repoRoot);
+          const { passed, output } = await runChecks(exec, repoRoot, env);
           return { content: [{ type: "text", text: `${passed ? "PASSED" : "FAILED"}\n\n${output}` }] };
         },
-        { annotations: { readOnlyHint: true } },
       ),
     ],
   });

@@ -27,6 +27,8 @@ export interface AgentConfig {
   effort: NonNullable<Options["effort"]>;
   maxTurns: number;
   maxBudgetUsd: number;
+  /** Environment for run_checks, without credentials. */
+  checksEnv?: NodeJS.ProcessEnv;
 }
 
 export interface AgentRun {
@@ -91,7 +93,7 @@ export async function runAgent(
     settingSources: ["project"],
     systemPrompt: { type: "preset", preset: "claude_code" },
     tools: AGENT_TOOLS,
-    mcpServers: { repo: createChecksServer(exec, config.repoRoot) },
+    mcpServers: { repo: createChecksServer(exec, config.repoRoot, config.checksEnv) },
     // Every call that isn't pre-approved goes through the policy; nothing is pre-approved.
     permissionMode: "default",
     canUseTool: createToolPolicy({ repoRoot: config.repoRoot, writableDirs: config.writableDirs }),

@@ -13,6 +13,15 @@ describe("decide", () => {
     expect(allowed("Glob", { pattern: "demo-app/**/*.ts" })).toBe(true);
   });
 
+  it("denies reading or writing files that may hold credentials", () => {
+    expect(allowed("Read", { file_path: resolve(repoRoot, ".env") })).toBe(false);
+    expect(allowed("Read", { file_path: "demo-app/.env.local" })).toBe(false);
+    expect(allowed("Grep", { pattern: "KEY", path: ".env" })).toBe(false);
+    expect(allowed("Read", { file_path: "CLAUDE.local.md" })).toBe(false);
+    expect(allowed("Write", { file_path: "demo-app/.env" })).toBe(false);
+    expect(allowed("Read", { file_path: ".env.example" })).toBe(true);
+  });
+
   it("allows writes only inside the writable dirs", () => {
     expect(allowed("Write", { file_path: resolve(repoRoot, "demo-app/src/limiter.ts") })).toBe(true);
     expect(allowed("Edit", { file_path: "demo-app/README.md" })).toBe(true);

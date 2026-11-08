@@ -2,6 +2,7 @@ import type { AgentRun } from "./agent.js";
 import type { CheckResult } from "./checks.js";
 import { branchName, commitMessage, prBody, prTitle } from "./pr.js";
 import { isWritable } from "./policy.js";
+import { findSecrets } from "./secrets.js";
 import type { Spec } from "./spec.js";
 
 /** The git operations the pipeline needs; implemented by Git, faked in tests. */
@@ -25,6 +26,10 @@ export interface PipelineDeps {
   dryRun: boolean;
   runAgent(spec: Spec): Promise<AgentRun>;
   runChecks(): Promise<CheckResult>;
+  /** Reads a repo-relative file, for the secret scan. */
+  readFile(path: string): Promise<string>;
+  /** Credential values from the environment that must never be committed. */
+  secrets: string[];
   log(line: string): void;
 }
 
@@ -65,6 +70,16 @@ export async function runPipeline(deps: PipelineDeps): Promise<PipelineResult> {
   if (!checks.passed) throw new Error(`Checks failed after the agent finished. Branch ${branch} kept for inspection.\n\n${checks.output}`);
 
   const body = prBody({ spec, run, files, model: deps.model, base, repoUrl: await git.repoUrl() });
+
+  // Gate 3: nothing that looks like a credential gets committed or posted, however it got there.
+  const texts: [string, string][] = [["the PR body", body]];
+  for (const file of files) texts.push([file, await deps.readFile(file)]);
+  for (const [where, text] of texts) {
+    const found = findSecrets(text, deps.secrets);
+    if (found.length) {
+      throw new Error(`Possible secret in ${where} (${found.join(", ")}). Nothing was committed; branch ${branch} kept for inspection.`);
+    }
+  }
   if (deps.dryRun) return { status: "dry-run", branch, files, body, run };
 
   await git.commit(files, commitMessage(spec, run));

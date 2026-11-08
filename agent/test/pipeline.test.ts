@@ -28,6 +28,7 @@ function setup({
   changed = ["demo-app/src/rate-limiter.ts", "demo-app/test/rate-limiter.test.ts"],
   checksPassed = true,
   dryRun = false,
+  contents = {} as Record<string, string>,
 } = {}) {
   let created = false;
   const git = {
@@ -49,6 +50,8 @@ function setup({
     dryRun,
     runAgent: vi.fn(async () => agentRun),
     runChecks: vi.fn(async () => ({ passed: checksPassed, output: checksPassed ? "ok" : "1 test failed" })),
+    readFile: vi.fn(async (path: string) => contents[path] ?? "export {};"),
+    secrets: ["sk-test-value-from-the-env"],
     log: () => {},
   };
   return { deps, git };
@@ -101,6 +104,13 @@ describe("runPipeline", () => {
   it("does not trust the agent: failing checks block the PR", async () => {
     const { deps, git } = setup({ checksPassed: false });
     await expect(runPipeline(deps)).rejects.toThrow(/Checks failed.*kept for inspection[\s\S]*1 test failed/);
+    expect(git.commit).not.toHaveBeenCalled();
+    expect(git.push).not.toHaveBeenCalled();
+  });
+
+  it("blocks the commit when a changed file contains a secret", async () => {
+    const { deps, git } = setup({ contents: { "demo-app/src/rate-limiter.ts": 'const key = "sk-test-value-from-the-env";' } });
+    await expect(runPipeline(deps)).rejects.toThrow("Possible secret in demo-app/src/rate-limiter.ts");
     expect(git.commit).not.toHaveBeenCalled();
     expect(git.push).not.toHaveBeenCalled();
   });

@@ -1,5 +1,6 @@
 import { isAbsolute, relative, resolve } from "node:path";
 import type { CanUseTool, PermissionResult } from "@anthropic-ai/claude-agent-sdk";
+import { isSecretFile } from "./secrets.js";
 
 export const CHECKS_TOOL = "mcp__repo__run_checks";
 
@@ -36,7 +37,7 @@ function targetPath(input: Record<string, unknown>): string | undefined {
 }
 
 /**
- * Decide every tool call: reads anywhere inside the repo, writes only inside
+ * Decide every tool call: reads inside the repo except secret files (.env, keys), writes only inside
  * `writableDirs`, the checks tool, and nothing else. Denials go back to the
  * model as a message, so it can correct course instead of failing the run.
  */
@@ -54,6 +55,7 @@ export function decide(toolName: string, input: Record<string, unknown>, { repoR
     if (typeof glob === "string" && (isAbsolute(glob) || glob.split(/[\\/]/).includes(".."))) {
       return deny(`File globs must stay inside the repository: ${glob}`);
     }
+    if (isSecretFile(path)) return deny(`${path} may hold credentials and is off limits.`);
     if (WRITE_TOOLS.has(toolName) && !isWritable(path, writableDirs)) {
       return deny(`Writing ${path} is not allowed. You may only change files under: ${writableDirs.join(", ")}.`);
     }
