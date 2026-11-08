@@ -49,7 +49,9 @@ export function annotatePatch(patch: string): Omit<AnnotatedFile, "path"> {
     const header = HUNK_HEADER.exec(line);
     if (header) {
       newLine = Number(header[1]);
-      out.push(line);
+      // Keep only "@@ -a,b +c,d @@". Git appends a section heading copied from the
+      // file, which is author-controlled text without a line-number prefix.
+      out.push(header[0]);
       continue;
     }
     const marker = line[0];

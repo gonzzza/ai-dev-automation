@@ -20,10 +20,10 @@ function fakeOctokit(createReview: ReturnType<typeof vi.fn>) {
 
 describe("publishReview", () => {
   it("posts a single COMMENT review with inline comments", async () => {
-    const createReview = vi.fn().mockResolvedValue({ data: { id: 11 } });
+    const createReview = vi.fn().mockResolvedValue({ data: { id: 11, user: { login: "bot" } } });
     const result = await publishReview(fakeOctokit(createReview), target, "summary", inline, [finding]);
 
-    expect(result).toEqual({ mode: "inline", reviewId: 11 });
+    expect(result).toEqual({ mode: "inline", reviewId: 11, author: "bot" });
     expect(createReview).toHaveBeenCalledExactlyOnceWith({
       owner: "o",
       repo: "r",
@@ -39,10 +39,10 @@ describe("publishReview", () => {
     const createReview = vi
       .fn()
       .mockRejectedValueOnce(Object.assign(new Error("Unprocessable"), { status: 422 }))
-      .mockResolvedValue({ data: { id: 12 } });
+      .mockResolvedValue({ data: { id: 12, user: null } });
     const result = await publishReview(fakeOctokit(createReview), target, "summary", inline, [finding]);
 
-    expect(result).toEqual({ mode: "body-only", reviewId: 12 });
+    expect(result).toEqual({ mode: "body-only", reviewId: 12, author: null });
     const retry = createReview.mock.calls[1]![0];
     expect(retry.comments).toBeUndefined();
     expect(retry.body).toContain("### Inline findings");
@@ -57,12 +57,13 @@ describe("publishReview", () => {
 });
 
 describe("supersedePreviousReviews", () => {
-  const bot = { type: "Bot" };
+  const me = { login: "ai-reviewer" };
   const reviews = [
-    { id: 1, user: bot, body: `${REVIEW_MARKER}\n\nold review` },
-    { id: 2, user: { type: "User" }, body: `quoting ${REVIEW_MARKER}` }, // a human, leave alone
-    { id: 3, user: bot, body: SUPERSEDED_BODY }, // already handled
-    { id: 4, user: bot, body: `${REVIEW_MARKER}\n\nnew review` }, // the one just posted
+    { id: 1, user: me, body: `${REVIEW_MARKER}\n\nold review` },
+    { id: 2, user: { login: "alice" }, body: `quoting ${REVIEW_MARKER}` }, // a human, leave alone
+    { id: 5, user: { login: "other-app[bot]" }, body: `${REVIEW_MARKER}\n\nanother install` }, // another identity
+    { id: 3, user: me, body: SUPERSEDED_BODY }, // already handled
+    { id: 4, user: me, body: `${REVIEW_MARKER}\n\nnew review` }, // the one just posted
   ];
 
   function fakeClient() {
@@ -81,9 +82,9 @@ describe("supersedePreviousReviews", () => {
     return { client, updateReview, graphql };
   }
 
-  it("replaces older bot reviews and minimizes their inline comments", async () => {
+  it("replaces older reviews by the same author and minimizes their inline comments", async () => {
     const { client, updateReview, graphql } = fakeClient();
-    const count = await supersedePreviousReviews(client, target, 4);
+    const count = await supersedePreviousReviews(client, target, { reviewId: 4, author: "ai-reviewer" });
 
     expect(count).toBe(1);
     expect(updateReview).toHaveBeenCalledExactlyOnceWith({
@@ -95,6 +96,18 @@ describe("supersedePreviousReviews", () => {
     });
     expect(graphql.mock.calls.map(([, vars]) => vars)).toEqual([{ id: "C_1_a" }, { id: "C_1_b" }]);
     expect(graphql.mock.calls[0]![0]).toContain("classifier: OUTDATED");
+  });
+
+  it("works for non-bot identities such as a PAT user", async () => {
+    const { client, updateReview } = fakeClient();
+    await supersedePreviousReviews(client, target, { reviewId: 99, author: "alice" });
+    expect(updateReview.mock.calls.map(([args]) => args.review_id)).toEqual([2]);
+  });
+
+  it("does nothing when the author is unknown", async () => {
+    const { client, updateReview } = fakeClient();
+    expect(await supersedePreviousReviews(client, target, { reviewId: 99, author: null })).toBe(0);
+    expect(updateReview).not.toHaveBeenCalled();
   });
 
   it("superseded body cannot be mistaken for a live review", () => {

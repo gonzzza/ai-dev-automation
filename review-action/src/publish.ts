@@ -12,6 +12,13 @@ export interface PublishTarget {
   commitId: string;
 }
 
+export interface PublishedReview {
+  mode: "inline" | "body-only";
+  reviewId: number;
+  /** Login that authored the review (the token's identity: a bot, PAT user or machine user). */
+  author: string | null;
+}
+
 /** Body that replaces an older AI review. Deliberately does not contain REVIEW_MARKER. */
 export const SUPERSEDED_BODY =
   "<!-- ai-dev-automation:review-superseded -->\n\n_🤖 This AI review is outdated. See the latest one below._";
@@ -27,7 +34,7 @@ export async function publishReview(
   summary: string,
   inline: InlineComment[],
   anchored: Finding[],
-): Promise<{ mode: "inline" | "body-only"; reviewId: number }> {
+): Promise<PublishedReview> {
   const base = {
     owner: target.owner,
     repo: target.repo,
@@ -37,14 +44,14 @@ export async function publishReview(
   };
   try {
     const { data } = await octokit.rest.pulls.createReview({ ...base, body: summary, comments: inline });
-    return { mode: "inline", reviewId: data.id };
+    return { mode: "inline", reviewId: data.id, author: data.user?.login ?? null };
   } catch (error) {
     if ((error as { status?: number }).status !== 422 || inline.length === 0) throw error;
     const { data } = await octokit.rest.pulls.createReview({
       ...base,
       body: `${summary}\n\n### Inline findings\n\n${anchored.map(renderFindingListItem).join("\n")}`,
     });
-    return { mode: "body-only", reviewId: data.id };
+    return { mode: "body-only", reviewId: data.id, author: data.user?.login ?? null };
   }
 }
 
@@ -53,16 +60,22 @@ const MINIMIZE = `mutation($id: ID!) {
 }`;
 
 /**
- * Keep one live AI review per PR: earlier ones get their body replaced and
+ * Keep one live AI review per PR: earlier ones by the same author get their body replaced and
  * their inline comments collapsed as outdated. Runs after the new review is
  * posted, so a failed run never leaves the PR without a review.
  * Returns the number of reviews superseded.
  */
-export async function supersedePreviousReviews(octokit: Client, target: PublishTarget, keepReviewId: number): Promise<number> {
+export async function supersedePreviousReviews(
+  octokit: Client,
+  target: PublishTarget,
+  latest: Pick<PublishedReview, "reviewId" | "author">,
+): Promise<number> {
   const { owner, repo, pullNumber } = target;
+  // Only touch reviews posted by the same identity: never another app's or a human's.
+  if (!latest.author) return 0;
   const reviews = await octokit.paginate(octokit.rest.pulls.listReviews, { owner, repo, pull_number: pullNumber, per_page: 100 });
   const stale = reviews.filter(
-    (r) => r.id !== keepReviewId && r.user?.type === "Bot" && r.body.includes(REVIEW_MARKER),
+    (r) => r.id !== latest.reviewId && r.user?.login === latest.author && r.body.includes(REVIEW_MARKER),
   );
 
   for (const review of stale) {

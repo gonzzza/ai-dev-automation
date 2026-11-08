@@ -1,0 +1,94 @@
+import type Anthropic from "@anthropic-ai/sdk";
+import { DEFAULT_EXCLUDE, selectFiles } from "./diff.js";
+import { publishReview, supersedePreviousReviews, type Octokit } from "./publish.js";
+import { anchorFindings, renderSummary } from "./render.js";
+import { EFFORTS, reviewDiff, type Effort } from "./review.js";
+import { bySeverityDesc, parseFailOn, shouldFail } from "./schema.js";
+
+/** The parts of @actions/core this action uses. */
+export interface ActionIO {
+  getInput(name: string): string;
+  getMultilineInput(name: string): string[];
+  setOutput(name: string, value: string): void;
+  setFailed(message: string): void;
+  setSecret(secret: string): void;
+  info(message: string): void;
+  warning(message: string): void;
+}
+
+export interface PullRequestPayload {
+  number: number;
+  title?: unknown;
+  body?: unknown;
+  head: { sha: string };
+}
+
+export interface RunDeps {
+  io: ActionIO;
+  repo: { owner: string; repo: string };
+  pullRequest: PullRequestPayload | undefined;
+  createOctokit(token: string): Pick<Octokit, "rest" | "graphql" | "paginate">;
+  createAnthropic(apiKey: string): Pick<Anthropic, "beta">;
+}
+
+const errorMessage = (error: unknown) => (error instanceof Error ? error.message : String(error));
+
+/** Validate inputs, review the PR, post the result. Throws on configuration or API errors. */
+export async function run({ io, repo: { owner, repo }, pullRequest: pr, createOctokit, createAnthropic }: RunDeps): Promise<void> {
+  const apiKey = io.getInput("anthropic-api-key");
+  if (!apiKey) {
+    // Typical for PRs from forks, which don't receive repository secrets.
+    io.warning("anthropic-api-key is empty; skipping AI review.");
+    return;
+  }
+  io.setSecret(apiKey);
+
+  if (!pr) throw new Error("This action only runs on pull_request events.");
+
+  const effort = io.getInput("effort") as Effort;
+  if (!EFFORTS.includes(effort)) throw new Error(`effort must be one of ${EFFORTS.join(", ")}`);
+  const failOn = parseFailOn(io.getInput("fail-on"));
+  const maxChars = Number(io.getInput("max-diff-chars"));
+  if (!Number.isInteger(maxChars) || maxChars <= 0) throw new Error("max-diff-chars must be a positive integer");
+  const exclude = [...DEFAULT_EXCLUDE, ...io.getMultilineInput("exclude").map((s) => s.trim()).filter(Boolean)];
+
+  const octokit = createOctokit(io.getInput("github-token"));
+  const files = await octokit.paginate(octokit.rest.pulls.listFiles, { owner, repo, pull_number: pr.number, per_page: 100 });
+  const { included, skipped } = selectFiles(files, { exclude, maxChars });
+  io.info(`Reviewing ${included.length} file(s), skipping ${skipped.length}.`);
+  if (included.length === 0) {
+    io.info("Nothing to review.");
+    io.setOutput("findings", "0");
+    io.setOutput("highest-severity", "none");
+    return;
+  }
+
+  const result = await reviewDiff(
+    createAnthropic(apiKey),
+    { title: String(pr.title ?? ""), body: typeof pr.body === "string" ? pr.body : null },
+    included,
+    { model: io.getInput("model"), effort },
+  );
+  const { findings } = result.review;
+  const { inline, anchored, unanchored } = anchorFindings(findings, included);
+  const summary = renderSummary(result.review, unanchored, skipped, { ...result, reviewedFiles: included.length });
+
+  const target = { owner, repo, pullNumber: pr.number, commitId: pr.head.sha };
+  const published = await publishReview(octokit, target, summary, inline, anchored);
+  io.info(`Posted review: ${findings.length} finding(s), ${inline.length} inline (${published.mode}).`);
+
+  try {
+    const superseded = await supersedePreviousReviews(octokit, target, published);
+    if (superseded) io.info(`Marked ${superseded} earlier AI review(s) as outdated.`);
+  } catch (error) {
+    // Cosmetic cleanup: never fail the check over it.
+    io.warning(`Could not mark earlier AI reviews as outdated: ${errorMessage(error)}`);
+  }
+
+  io.setOutput("findings", String(findings.length));
+  io.setOutput("highest-severity", [...findings].sort(bySeverityDesc)[0]?.severity ?? "none");
+
+  if (shouldFail(findings, failOn)) {
+    io.setFailed(`Found issues at or above severity "${failOn}".`);
+  }
+}
