@@ -1,6 +1,6 @@
 # AI Code Review Action
 
-Reviews a pull request with Claude and posts one GitHub review: a summary, plus inline comments on bugs, security issues, missing tests, and performance problems. The review is advisory. It never approves or blocks unless you set `fail-on`.
+Reviews a pull request with Claude and posts one GitHub review: a summary, plus inline comments on bugs, security issues, missing tests, and performance problems. The review is advisory: findings never approve or block a PR unless you set `fail-on`. Operational errors (API outage, a refusal, a malformed response) do fail the job, so you notice them instead of silently getting no review. Don't make the check required unless you also use `fail-on`.
 
 ## Usage
 
