@@ -77057,12 +77057,17 @@ async function reviewDiff(client, pr, files, { model, effort }) {
 // src/run.ts
 var FINDINGS_JSON_MAX_BYTES = 64e3;
 var FINDING_BODY_MAX_CHARS = 4e3;
+var clip = (text, max) => text.length > max ? `${text.slice(0, max)}\u2026` : text;
 function findingsJson(findings) {
   const kept = [];
   let size = 2;
   for (const finding of [...findings].sort(bySeverityDesc)) {
-    const body = finding.body.length > FINDING_BODY_MAX_CHARS ? `${finding.body.slice(0, FINDING_BODY_MAX_CHARS)}\u2026` : finding.body;
-    const entry = { ...finding, body };
+    const entry = {
+      ...finding,
+      path: clip(finding.path, 500),
+      title: clip(finding.title, 300),
+      body: clip(finding.body, FINDING_BODY_MAX_CHARS)
+    };
     const entrySize = Buffer.byteLength(JSON.stringify(entry)) + 1;
     if (size + entrySize > FINDINGS_JSON_MAX_BYTES) break;
     kept.push(entry);

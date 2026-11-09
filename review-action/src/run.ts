@@ -36,6 +36,7 @@ export interface RunDeps {
 /** Caps for `findings-json`. Consumers often pass it through an env var, and Linux caps one at 128 KB. */
 export const FINDINGS_JSON_MAX_BYTES = 64_000;
 export const FINDING_BODY_MAX_CHARS = 4_000;
+const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, max)}…` : text);
 
 /**
  * The findings for automation downstream, such as the agent's fix cycle: most severe first, long
@@ -46,8 +47,14 @@ export function findingsJson(findings: Finding[]): string {
   const kept: Finding[] = [];
   let size = 2; // "[]"
   for (const finding of [...findings].sort(bySeverityDesc)) {
-    const body = finding.body.length > FINDING_BODY_MAX_CHARS ? `${finding.body.slice(0, FINDING_BODY_MAX_CHARS)}…` : finding.body;
-    const entry = { ...finding, body };
+    // Every field is clipped, so one finding always fits and the output is never empty while
+    // highest-severity reports something.
+    const entry = {
+      ...finding,
+      path: clip(finding.path, 500),
+      title: clip(finding.title, 300),
+      body: clip(finding.body, FINDING_BODY_MAX_CHARS),
+    };
     const entrySize = Buffer.byteLength(JSON.stringify(entry)) + 1; // UTF-8 bytes, + the comma
     if (size + entrySize > FINDINGS_JSON_MAX_BYTES) break;
     kept.push(entry);

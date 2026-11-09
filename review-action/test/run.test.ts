@@ -161,6 +161,12 @@ describe("findingsJson", () => {
     expect(parsed.length).toBeLessThan(findings.length);
   });
 
+  it("always keeps the most severe finding, however long its fields", () => {
+    const parsed = JSON.parse(findingsJson([finding({ title: "t".repeat(100_000), path: "p".repeat(100_000) })])) as Finding[];
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0]!.title).toHaveLength(301);
+  });
+
   it("keeps small reviews whole", () => {
     expect(JSON.parse(findingsJson([finding()]))).toEqual([finding()]);
     expect(findingsJson([])).toBe("[]");
