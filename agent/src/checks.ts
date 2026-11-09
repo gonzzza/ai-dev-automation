@@ -174,14 +174,25 @@ export async function runChecks(exec: Exec, repoRoot: string, env?: NodeJS.Proce
     return { passed: result.code === 0, output: tail(`${result.stdout}\n${result.stderr}`.trim(), 20_000) };
   }
   const name = `agent-checks-${randomBytes(6).toString("hex")}`;
-  try {
-    const result = await exec("docker", sandboxArgs(repoRoot, command, sandbox, name), { cwd: repoRoot, env });
-    return { passed: result.code === 0, output: tail(`${result.stdout}\n${result.stderr}`.trim(), 20_000) };
-  } finally {
-    // Always, and before anything inspects the tree: after a timeout the container would otherwise
-    // keep running, with the repo mounted, while the gates check and commit it. After a normal exit
-    // --rm has already removed it, and this is a harmless no-op.
-    await exec("docker", ["rm", "--force", name], { env });
+  // Removed always, and before anything inspects the tree: after a timeout the container would
+  // otherwise keep running, with the repo mounted, while the gates check and commit it.
+  const result = await exec("docker", sandboxArgs(repoRoot, command, sandbox, name), { cwd: repoRoot, env }).catch(async (error: unknown) => {
+    await removeContainer(exec, name, env);
+    throw error;
+  });
+  await removeContainer(exec, name, env);
+  return { passed: result.code === 0, output: tail(`${result.stdout}\n${result.stderr}`.trim(), 20_000) };
+}
+
+/**
+ * `docker rm --force`. "No such container" is the normal case: --rm already removed it. Anything
+ * else means it may still be running against the repo, so this fails closed: the run stops, and
+ * nothing is committed.
+ */
+async function removeContainer(exec: Exec, name: string, env?: NodeJS.ProcessEnv): Promise<void> {
+  const removed = await exec("docker", ["rm", "--force", name], { env });
+  if (removed.code !== 0 && !/no such container/i.test(removed.stderr)) {
+    throw new Error(`Could not remove sandbox container ${name}; stopping so nothing is committed while it may still run: ${removed.stderr.trim()}`);
   }
 }
 

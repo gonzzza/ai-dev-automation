@@ -68,6 +68,16 @@ describe("runChecks", () => {
     expect(calls.map((a) => a[0])).toEqual(["run", "rm"]);
   });
 
+  it("fails closed when the container can't be removed, but not when --rm already removed it", async () => {
+    const gone: Exec = async (_cmd, args) =>
+      args[0] === "rm" ? { code: 1, stdout: "", stderr: "Error response from daemon: No such container: x" } : { code: 0, stdout: "", stderr: "" };
+    expect(await runChecks(gone, "/repo", {}, docker)).toMatchObject({ passed: true });
+
+    const stuck: Exec = async (_cmd, args) =>
+      args[0] === "rm" ? { code: 1, stdout: "", stderr: "Error response from daemon: cannot remove container: device busy" } : { code: 0, stdout: "", stderr: "" };
+    await expect(runChecks(stuck, "/repo", {}, docker)).rejects.toThrow(/Could not remove sandbox container agent-checks-[0-9a-f]+; stopping/);
+  });
+
   it("gives every run its own container name", async () => {
     const names = new Set<string>();
     const fake: Exec = async (_cmd, args) => {
