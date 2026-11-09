@@ -60,7 +60,7 @@ npm run agent -- --fix-pr 5 --findings findings.json   # findings.json: the revi
 AI review ─▶ any finding ≥ medium? ──no──▶ done: the human reviews, low findings included
                     │ yes
                     ▼
-             cycle limit or no progress? ──yes──▶ stop: comment "handing over to a human"
+             cycle limit, or a finding raised again? ──yes──▶ stop: comment "handing over to a human"
                     │ no
                     ▼
              agent fixes or declines each finding ─▶ same gates as a new PR ─▶ commit, push, comment
@@ -69,8 +69,10 @@ AI review ─▶ any finding ≥ medium? ──no──▶ done: the human revie
 ```
 
 - **Only real findings get fixed.** Findings below `--min-severity` (default `medium`) are left for the human and listed in the comment. The agent checks each remaining finding against the code. It fixes the real ones with a test and declines the wrong ones with a reason, since the reviewer is a model too.
-- **Bounded.** The cycle stops after `--max-cycles` fix commits (default 5). It also stops when a cycle didn't reduce the number of findings, so the fixer and the reviewer can't trade the same issue back and forth. Each stop posts a comment that hands the PR to a human.
-- **State lives on the PR branch.** Each fix commit carries `Agent-Fix-Cycle` and `Agent-Fix-Findings` trailers, and the next run counts them. No database or run-to-run memory is involved, and the history is visible in `git log`.
+- **Deferred findings are context, not ignored.** The agent sees the lower-severity findings too, with instructions not to fix them and not to write code or tests that lock in what they describe. Without that, the first real run on [PR #5](https://github.com/gonzzza/ai-dev-automation/pull/5) added a test that treated a low-rated bug as intended behavior.
+- **Bounded.** The cycle stops after `--max-cycles` fix commits (default 5). It also stops as soon as the review raises a finding that an earlier cycle already worked on, matched by file, category and a line within 25 of the original. That means the fixer and the reviewer disagree, and a human should settle it rather than let them trade the issue back and forth. New findings alone keep the cycle going. The match is a heuristic that can err both ways. A genuinely new finding close to a fixed one stops the cycle early, which costs a human look. A fix that moves code far enough can hide a real repeat, and the cycle cap bounds that. Each stop posts a comment that hands the PR to a human.
+- **State lives on the PR branch.** Each fix commit carries an `Agent-Fix-Cycle` trailer and one `Agent-Fix-Addressed` trailer per finding it worked on. The next run reads them back. No database or run-to-run memory is involved, and the history is visible in `git log`.
+- **Severity is approximate.** The reviewer is a model, and it can rate the same issue differently from one run to the next. On PR #5 the clock bug was rated medium, then low, then medium again. The threshold decides which findings get an automated attempt; it doesn't decide what is safe to merge. The human approval does that, with every finding still on the PR. Keeping ratings stable, for example by giving the reviewer its previous findings, is a possible next step.
 - **Same guardrails.** Fix mode only touches open `agent/*` PRs from this repository. It refuses to run if the branch moved since the reviewed commit (`--reviewed-sha`). It has the same tools, permission policy, scope and secret gates, and harness re-check as a new PR, and the findings are escaped and treated as untrusted input like a spec. The prompt is [`fix-prompt.md`](fix-prompt.md).
 - **It never merges.** The last step is always a human approval.
 

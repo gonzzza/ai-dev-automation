@@ -38,8 +38,8 @@ jobs:
           fail-on: none
 
   # Fix cycle: on the agent's own PRs, the agent addresses findings at medium or above, pushes, and
-  # the push triggers this workflow again. The agent stops itself after 5 fix commits or when a
-  # cycle makes no progress (see agent/README.md#fix-cycle). Low findings are left for the human.
+  # the push triggers this workflow again. The agent stops itself after 5 fix commits or when the
+  # review raises a finding it already worked on (see agent/README.md#fix-cycle). Low findings go to the human.
   fix:
     needs: review
     if: >-

@@ -3,7 +3,7 @@ import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { run, type Exec } from "./exec.js";
-import { CYCLE_TRAILER, FINDINGS_TRAILER, type PullRequestInfo } from "./fix.js";
+import { ADDRESSED_TRAILER, CYCLE_TRAILER, type PullRequestInfo } from "./fix.js";
 
 /**
  * Parses `git status --porcelain=v1 -z`: NUL-separated "XY path" entries, no quoting.
@@ -143,7 +143,7 @@ export class Git {
 
   /** The trailers the fix cycle writes, one NUL-led record per commit in `range`. */
   cycleTrailers(range: string) {
-    return this.git("log", `--format=%x00%(trailers:key=${CYCLE_TRAILER},key=${FINDINGS_TRAILER},unfold)`, range);
+    return this.git("log", `--format=%x00%(trailers:key=${CYCLE_TRAILER},key=${ADDRESSED_TRAILER},unfold)`, range);
   }
 
   async pullRequest(number: number): Promise<PullRequestInfo> {
