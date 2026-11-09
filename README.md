@@ -207,3 +207,7 @@ npm run build            # review-action bundles to dist/, which is committed
 ```
 
 Tests are offline and fast. Git, GitHub, the clock and the Claude API are injected and faked, so `npm run check` never calls a real API. [`CLAUDE.md`](CLAUDE.md) has the conventions for people and coding agents working on the repo.
+
+## License
+
+[MIT](LICENSE). The bundled review action includes third-party packages under their own licenses, listed in [`review-action/dist/THIRD_PARTY_LICENSES.txt`](review-action/dist/THIRD_PARTY_LICENSES.txt).
