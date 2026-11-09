@@ -54,11 +54,11 @@ The agent's tools are limited in code, so the limits don't depend on the model f
 - **No shell.** It has only `Read`, `Write`, `Edit`, `Glob` and `Grep`. To run lint, typecheck and tests it calls `run_checks`, a tool served by an in-process MCP server that runs one fixed command.
 - **Permission policy** ([`src/policy.ts`](src/policy.ts)). It runs as a `PreToolUse` hook, which sees every tool call. (`canUseTool` alone isn't enough, because Claude Code can approve reads inside the working directory without calling it.) The rules:
   - Reads are allowed only inside the repo.
-  - No path or glob may name a file that can hold credentials: `.env*` other than `.env.example`, `CLAUDE.local.md`, `.npmrc`, key files.
+  - No path or glob may name a file that can hold credentials: `.env*` other than `.env.example`, `CLAUDE.local.md`, `.npmrc`, key files. This is a best-effort name check. A Grep across a whole directory relies on ripgrep skipping gitignored files, and the secret scan below backs it up.
   - Writes are allowed only inside `--scope`, and never in `node_modules`, `.git`, or the files that define how the checks run (`package.json`, `tsconfig*.json`, Vitest and ESLint config). This stops the agent from turning the harness's own check into a no-op.
   - Every other call is denied. The reason goes back to the model so it can correct course.
 - **No credentials in the checks' environment.** `run_checks` gets an environment without the API key, tokens or passwords, and `gh` is logged out.
-- **Safe git after the run.** Every harness git command runs with hooks and fsmonitor disabled. The harness also refuses to continue if `.git/config` or `.git/hooks` changed during the run, so nothing planted there runs with your credentials.
+- **Safer git after the run.** Every harness git command runs with hooks and fsmonitor disabled. The harness also refuses to continue if the repo's `.git/config` or `.git/hooks` changed during the run, and `.gitattributes` is protected. This closes the in-repo ways planted code could run during the commit and push.
 - **Secret scan.** Before committing, the harness scans every changed file and the PR body. It blocks the commit if it finds a credential value from its environment or a known key format.
 - **No git access.** The agent cannot commit, push or touch other branches. The harness does all of that after verification.
 - **Budgets.** `--max-turns` and `--max-budget` stop a runaway loop. Invalid values are rejected, so a typo can't turn a cap off.
@@ -70,7 +70,11 @@ The agent writes the tests, and `run_checks` runs them, so the agent can run arb
 - has no credentials in its environment, and finds `gh` logged out;
 - still has your user's file system and network access, so it can read files on disk, including a `.env` in the repo and `node_modules`.
 
-The gates make sure anything it does is caught before a commit, or shows up in the PR diff. They can't stop code from reading a file and sending it over the network.
+The gates catch changes to the repo before anything is committed, and anything else the agent changes in the repo shows up in the PR diff. Outside the repo, they can't stop that code from:
+- reading a file and sending it over the network;
+- changing your user-level configuration, such as `~/.gitconfig`, gh's config or your shell profile, which later commands, the harness's own included, would pick up.
+
+Protecting all of that is a job for an operating-system boundary, not for checks inside the process.
 
 The defenses are layered, but they are not a sandbox. Run on your machine only specs you trust, with the key in an environment variable rather than in `.env`. For anything else, run the agent in a disposable container or a CI job that has only the secrets it needs.
 
