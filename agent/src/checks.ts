@@ -58,10 +58,15 @@ export function installArgs(repoRoot: string, volume: string, { image, uid, gid 
   const script = [
     "set -e",
     "mkdir -p /tmp/build && cd /tmp/build",
-    "cp /src/package.json /src/package-lock.json .",
-    // Workspaces need their package.json too, at the same relative paths.
-    `for ws in $(node -p 'require("/src/package.json").workspaces?.join(" ") ?? ""'); do mkdir -p "$ws" && cp "/src/$ws/package.json" "$ws/"; done`,
+    "cp /src/package-lock.json .",
+    // Every package.json, at its path, so workspaces resolve however they're declared: listed,
+    // globbed ("packages/*") or in the object form. npm ci only reads the ones it needs.
+    "(cd /src && find . -name package.json -not -path '*/node_modules/*' -not -path './.git/*' | tar -cf - -T -) | tar -xf -",
     "npm ci --no-audit --no-fund",
+    // Packages npm nests in a workspace's own node_modules (version conflicts) wouldn't reach the
+    // sandbox, which only replaces the root node_modules. Stop clearly rather than run on the host's.
+    "nested=$(find . -mindepth 2 -type d -name node_modules -not -path './node_modules/*' -prune)",
+    `if [ -n "$nested" ]; then echo "--sandbox docker supports dependencies in the root node_modules only; npm nested some in: $nested" >&2; exit 3; fi`,
     "mkdir -p node_modules",
     "find /deps -mindepth 1 -delete",
     `cp -a node_modules/. /deps/${owner}`,

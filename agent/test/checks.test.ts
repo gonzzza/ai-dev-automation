@@ -154,6 +154,8 @@ describe("the dependency volume", () => {
     expect(args.filter((a) => a.startsWith("--env="))).toEqual(["--env=HOME=/tmp", "--env=npm_config_cache=/tmp/.npm", "--env=npm_config_update_notifier=false"]);
     const script = args.at(-1)!;
     expect(script).toContain("npm ci");
+    expect(script).toContain("find . -name package.json -not -path '*/node_modules/*'"); // globbed workspaces too
+    expect(script).toContain("supports dependencies in the root node_modules only");
     expect(script).toContain("chown -R 1001:118 /deps");
     expect(script.trimEnd().split("\n").at(-1)).toBe("touch /deps/.ai-dev-automation-installed"); // marker last
   });
@@ -194,24 +196,24 @@ describe.runIf(dockerAvailable)("the dependency volume, for real", () => {
   });
 
   it("installs a workspace project into a labeled volume that the sandbox can use but not change", { timeout: 300_000 }, async () => {
-    // A tiny npm workspace with no registry packages, so the install needs no network: the root
-    // depends on its workspace "pkg", which npm ci links into node_modules.
+    // A tiny npm workspace with no registry packages, so the install needs no network. The workspace
+    // is declared as a glob, the common form, and npm ci links it into node_modules.
     dir = mkdtempSync(join(tmpdir(), "sandbox-deps-"));
     const name = `t${Date.now()}`; // a lockfile of its own, so a volume of its own
     mkdirSync(join(dir, ".git"));
-    mkdirSync(join(dir, "pkg"));
-    writeFileSync(join(dir, "package.json"), JSON.stringify({ name, version: "1.0.0", private: true, workspaces: ["pkg"] }));
-    writeFileSync(join(dir, "pkg", "package.json"), JSON.stringify({ name: "pkg", version: "1.0.0", main: "index.js" }));
-    writeFileSync(join(dir, "pkg", "index.js"), "module.exports = 42;\n");
+    mkdirSync(join(dir, "packages", "pkg"), { recursive: true });
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ name, version: "1.0.0", private: true, workspaces: ["packages/*"] }));
+    writeFileSync(join(dir, "packages", "pkg", "package.json"), JSON.stringify({ name: "pkg", version: "1.0.0", main: "index.js" }));
+    writeFileSync(join(dir, "packages", "pkg", "index.js"), "module.exports = 42;\n");
     const lockfile = JSON.stringify({
       name,
       version: "1.0.0",
       lockfileVersion: 3,
       requires: true,
       packages: {
-        "": { name, version: "1.0.0", workspaces: ["pkg"] },
-        "node_modules/pkg": { resolved: "pkg", link: true },
-        pkg: { version: "1.0.0" },
+        "": { name, version: "1.0.0", workspaces: ["packages/*"] },
+        "node_modules/pkg": { resolved: "packages/pkg", link: true },
+        "packages/pkg": { version: "1.0.0" },
       },
     });
     writeFileSync(join(dir, "package-lock.json"), lockfile);

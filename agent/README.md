@@ -194,6 +194,7 @@ If Docker isn't available, or the install fails, `--sandbox docker` stops before
 What it doesn't cover:
 
 - **The repo's own files are writable.** They have to be, for the tests to run. Changes to tracked files show up in the diff and go through the gates. Untracked, gitignored files, such as the workspaces' `.vite` caches, are not committed.
+- **Dependencies must all be in the root `node_modules`.** npm sometimes nests packages in a workspace's own `node_modules` when versions conflict. The sandbox replaces only the root folder, so in that case the install stops with a message naming the folders, rather than letting the tests use the host's copies.
 - **The install step has network access.** It runs before any agent-written code exists, with only the lockfile and `package.json` files, and installs exactly what the lockfile pins. That's the same trust as CI's own `npm ci`.
 - **The agent process still holds the API key and, in CI, the push token**, because it calls the API and pushes. Moving the push into a separate job that only holds the token would keep the token out of the agent's job entirely.
 
