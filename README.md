@@ -102,7 +102,7 @@ Every repo's agent and review follow the same engineering standards, kept in one
 - **The review** checks each PR against the standards that apply to its changed files. A finding that breaks one cites it, e.g. `🐛 Bug · medium · TS-002`.
 - **Every run records which standards it used, at which version:** the review summary, the agent's PR body and its audit log.
 
-**In this repo**, the standards live in [`org-standards/`](org-standards) so the demo is self-contained. The review workflow reads them from the PR's base commit, so a PR can't change the rules it's reviewed against.
+**In this repo**, the standards live in [`org-standards/`](org-standards) so the demo is self-contained. The review job and the fix job both read them from the PR's base commit, so a PR can't change the rules it's reviewed and fixed against.
 
 **In an enterprise setup**, they belong in their own repository, for example `acme/engineering-standards`:
 
@@ -185,7 +185,6 @@ The reviewer's findings are advice. The agent may decline a finding with a reaso
 - **Reviewer severity varies between runs.** The same clock bug was rated medium, then low, then medium. The severity threshold decides which findings the agent attempts, not what is safe to merge; the human approval decides that.
 - **The sandbox covers the tests, not the agent.** The agent process itself holds the API key and, in CI, the push token. Locally the sandbox is opt-in (`--sandbox docker`, which needs Docker). Without it, agent-written tests run on your machine with a credential-free environment but full network and file access.
 - **An agent branch is identified by its name.** The fix cycle runs on any open `agent/*` PR from this repository, and anyone with push access can create such a branch. In an organization, add a branch ruleset that lets only the agent's GitHub App create `agent/**` branches, or have the fix job check that the PR author is that App.
-- **This repo's CI fix job doesn't pass `--standards` to the agent yet.** In CI, the review checks PRs against the standards, but the agent fixing the findings only sees the finding text and the cited rule id. Locally, `--standards org-standards` gives the agent the standards in both modes.
 - **Cost figures are estimates.** The PR footers and the audit log show the Agent SDK's estimate from token usage at list prices. The review's footer shows token counts only. The [Console](https://console.anthropic.com/settings/usage) has the actual bill.
 
 ## Development
