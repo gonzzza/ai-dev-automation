@@ -31,6 +31,14 @@ describe("parseFindings", () => {
     expect(parseFindings("[]")).toEqual([]);
   });
 
+  it("keeps the first 50 and trims over-long fields instead of failing a big review", () => {
+    const many = Array.from({ length: 60 }, (_, i) => finding({ line: i, title: "t".repeat(400) }));
+    const parsed = parseFindings(JSON.stringify(many));
+    expect(parsed).toHaveLength(50);
+    expect(parsed[0]!.line).toBe(0);
+    expect(parsed[0]!.title).toHaveLength(301); // 300 + the ellipsis
+  });
+
   it("rejects anything that isn't a list of well-formed findings", () => {
     expect(() => parseFindings("not json")).toThrow("not valid JSON");
     expect(() => parseFindings(JSON.stringify([{ ...finding(), severity: "urgent" }]))).toThrow("expected shape");
@@ -234,6 +242,13 @@ describe("runFixCycle", () => {
     const comment = git.commentOnPullRequest.mock.calls[0]![1];
     expect(comment).toContain("❎ Declined · medium");
     expect(comment).toContain("Nothing was committed");
+  });
+
+  it("comments without committing when the agent reports a fix but changed nothing", async () => {
+    const { deps, git } = setup({ changed: [] }); // the report says "fixed"
+    expect(await runFixCycle(deps)).toMatchObject({ status: "declined" });
+    expect(git.commit).not.toHaveBeenCalled();
+    expect(git.commentOnPullRequest).toHaveBeenCalledOnce();
   });
 
   it("applies the same gates as a new PR: scope, and secrets in what gets posted", async () => {

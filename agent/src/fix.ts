@@ -13,14 +13,19 @@ const rank = (s: Severity): number => SEVERITIES.indexOf(s);
  * agent wrote, so it is validated here and treated like a spec: untrusted input to the fixer.
  */
 export const FindingSchema = z.object({
-  path: z.string().max(500),
+  path: z.string(),
   line: z.number().int(),
-  category: z.string().max(50),
+  category: z.string(),
   severity: z.enum(SEVERITIES),
-  title: z.string().max(300),
-  body: z.string().max(20_000),
+  title: z.string(),
+  body: z.string(),
 });
 export type Finding = z.infer<typeof FindingSchema>;
+
+/** Bounds on what reaches the prompt. Over-long input is trimmed, not rejected, so a big review still gets fixed. */
+export const MAX_FINDINGS = 50;
+const FIELD_LIMITS = { path: 500, category: 50, title: 300, body: 20_000 } as const;
+const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, max)}…` : text);
 
 export function parseFindings(json: string): Finding[] {
   let data: unknown;
@@ -29,9 +34,16 @@ export function parseFindings(json: string): Finding[] {
   } catch {
     throw new Error("Findings are not valid JSON.");
   }
-  const result = z.array(FindingSchema).max(50).safeParse(data);
+  const result = z.array(FindingSchema).safeParse(data);
   if (!result.success) throw new Error(`Findings do not match the expected shape: ${result.error.message}`);
-  return result.data;
+  // The review action sorts most severe first, so keeping the head keeps what matters.
+  return result.data.slice(0, MAX_FINDINGS).map((f) => ({
+    ...f,
+    path: clip(f.path, FIELD_LIMITS.path),
+    category: clip(f.category, FIELD_LIMITS.category),
+    title: clip(f.title, FIELD_LIMITS.title),
+    body: clip(f.body, FIELD_LIMITS.body),
+  }));
 }
 
 export const FixReportSchema = z.object({
@@ -280,8 +292,9 @@ export async function runFixCycle(deps: FixDeps): Promise<FixResult> {
   log(`Agent finished in ${run.turns} turns, $${run.costUsd.toFixed(2)}.`);
   const context = { cycle, maxCycles: deps.maxCycles, actionable, deferred, model: deps.model };
 
-  // Declining every finding is a valid outcome: say why on the PR and end the cycle without a commit.
-  if (!run.report.outcomes.some((o) => o.outcome === "fixed") && (await git.changedFiles()).length === 0) {
+  // No changes is a valid outcome, whether the agent declined every finding or found the code already
+  // handles them: say why on the PR and end the cycle without a commit.
+  if ((await git.changedFiles()).length === 0) {
     const body = fixComment(context, run, false);
     await scanForSecrets(deps, branch, [["the PR comment", body]], []);
     return { status: "declined", commentUrl: await git.commentOnPullRequest(pullNumber, body), run };

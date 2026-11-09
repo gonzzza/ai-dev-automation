@@ -98,6 +98,8 @@ async function main(): Promise<void> {
 
   if (fixMode) {
     if (!values.findings) throw new Error("--fix-pr needs --findings <file.json>.");
+    // A preview that still pushed and commented would be worse than no preview.
+    if (values["dry-run"]) throw new Error("--dry-run is not supported with --fix-pr.");
     const minSeverity = values["min-severity"] as Severity;
     if (!SEVERITIES.includes(minSeverity)) throw new Error(`Invalid --min-severity: ${minSeverity}`);
     const template = await loadFixTemplate();
