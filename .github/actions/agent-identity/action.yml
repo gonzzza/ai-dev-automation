@@ -1,0 +1,45 @@
+name: Agent identity
+description: >-
+  Mints a short-lived token for the agent's GitHub App and makes git commit as the App's bot, so
+  the agent's branches, commits, PRs and comments show as <app>[bot] instead of a person.
+inputs:
+  client-id:
+    description: The agent App's client ID.
+    required: true
+  private-key:
+    description: The agent App's private key.
+    required: true
+outputs:
+  token:
+    description: Installation token for this repository. Revoked when the job ends.
+    value: ${{ steps.app.outputs.token }}
+  app-slug:
+    description: The App's slug, e.g. ai-dev-automation-agent.
+    value: ${{ steps.app.outputs.app-slug }}
+  login:
+    description: The App's bot login, e.g. ai-dev-automation-agent[bot].
+    value: ${{ steps.git.outputs.login }}
+runs:
+  using: composite
+  steps:
+    - id: app
+      uses: actions/create-github-app-token@v3
+      with:
+        client-id: ${{ inputs.client-id }}
+        private-key: ${{ inputs.private-key }}
+        # Only what the agent needs, for this repository only. No workflows permission: GitHub
+        # rejects any push with this token that changes .github/workflows/.
+        permission-contents: write
+        permission-pull-requests: write
+    - id: git
+      shell: bash
+      env:
+        GH_TOKEN: ${{ steps.app.outputs.token }}
+        SLUG: ${{ steps.app.outputs.app-slug }}
+      run: |
+        login="${SLUG}[bot]"
+        # The bot's noreply address, so GitHub links the commits to the App's account.
+        id=$(gh api "users/${login}" --jq .id)
+        git config user.name "$login"
+        git config user.email "${id}+${login}@users.noreply.github.com"
+        echo "login=$login" >> "$GITHUB_OUTPUT"

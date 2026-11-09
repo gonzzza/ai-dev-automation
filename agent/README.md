@@ -97,10 +97,12 @@ AI review ─▶ any finding ≥ medium? ──no──▶ done: the human revie
 - **Each finding gets an answer on its own thread.** The review action's `findings-json` carries the id of each inline comment. After the push, the agent replies on that thread: `Fixed in <commit>` with what it changed, and resolves the thread, or `Declined` with its reason, leaving the thread open for the human. Findings that only appear in the review summary have no thread and are covered by the cycle's summary comment. Replies are best-effort: a failed one is logged, and the summary comment still lists every outcome. Threads with replies aren't collapsed when the next review supersedes the old one.
 - **State lives on the PR branch.** Each fix commit carries an `Agent-Fix-Cycle` trailer and one `Agent-Fix-Addressed` trailer per finding it worked on. The next run reads them back. No database or run-to-run memory is involved, and the history is visible in `git log`.
 - **Severity is approximate.** The reviewer is a model, and it can rate the same issue differently from one run to the next. On PR #5 the clock bug was rated medium, then low, then medium again. The threshold decides which findings get an automated attempt; it doesn't decide what is safe to merge. The human approval does that, with every finding still on the PR. Keeping ratings stable, for example by giving the reviewer its previous findings, is a possible next step.
-- **Same guardrails.** Fix mode only touches open `agent/*` PRs from this repository. It refuses to run if the branch moved since the reviewed commit (`--reviewed-sha`). It has the same tools, permission policy, scope and secret gates, and harness re-check as a new PR, and the findings are escaped and treated as untrusted input like a spec. The prompt is [`fix-prompt.md`](fix-prompt.md).
+- **Same guardrails.** Fix mode only touches open `agent/*` PRs from this repository, and in CI only those the agent's App opened. It refuses to run if the branch moved since the reviewed commit (`--reviewed-sha`). It has the same tools, permission policy, scope and secret gates, and harness re-check as a new PR, and the findings are escaped and treated as untrusted input like a spec. The prompt is [`fix-prompt.md`](fix-prompt.md).
 - **It never merges.** The last step is always a human approval.
 
-**Setup in CI.** The workflow needs an `AGENT_GITHUB_TOKEN` secret in addition to `ANTHROPIC_API_KEY`. A push made with the workflow's own `GITHUB_TOKEN` doesn't trigger workflows, so the fix would never be reviewed. Use a [fine-grained token](https://github.com/settings/personal-access-tokens/new) limited to this repository, with *Contents* and *Pull requests* set to read and write and a short expiry. A GitHub App installation token is the better choice in an organization, because the commits and comments then come from a bot identity, not a person.
+**Setup in CI.** The fix job acts as the agent's GitHub App (see [the README](../README.md#run-the-loop-in-ci-as-a-bot)): `AGENT_APP_CLIENT_ID` and `AGENT_APP_PRIVATE_KEY` mint a one-hour token for this repository, and the App's bot authors the push, the comment and the thread replies. The workflow's own `GITHUB_TOKEN` wouldn't do: a push made with it doesn't trigger workflows, so the fix would never be reviewed.
+
+**Only the App's own PRs.** An `agent/*` branch name isn't proof: anyone with push access can create one. The fix job therefore checks that the App's bot opened the PR, and the harness checks again with `--agent-app <slug>` before it touches anything. It compares `gh`'s author against `app/<slug>` with the bot flag set, so a person who registers the App's name as a username doesn't pass.
 
 ## Audit log and monitoring
 
@@ -197,7 +199,7 @@ Protecting all of that is a job for an operating-system boundary, not for checks
 With `--sandbox docker`, `run_checks` and the harness's own re-check run `npm run check` in a throwaway container, so code the model wrote never runs where the secrets are:
 
 ```
-runner: ANTHROPIC_API_KEY, AGENT_GITHUB_TOKEN, the agent, the audit log
+runner: ANTHROPIC_API_KEY, the agent App's token, the agent, the audit log
   └─ run_checks ─▶ docker run --network=none, repo mounted, .git and node_modules read-only, no secrets
                      └─ npm run check   ← agent-written tests run here
 ```
