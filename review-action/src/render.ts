@@ -52,7 +52,8 @@ export function anchorFindings(
 }
 
 export function renderFinding(f: Finding): string {
-  return `**${CATEGORY_LABEL[f.category]} · ${f.severity}**: ${f.title}\n\n${f.body}`;
+  const rule = f.rule ? ` · ${f.rule}` : "";
+  return `**${CATEGORY_LABEL[f.category]} · ${f.severity}${rule}**: ${f.title}\n\n${f.body}`;
 }
 
 /** One-line list item, for findings shown in the review body instead of inline. */
@@ -65,6 +66,26 @@ export interface SummaryMeta {
   inputTokens: number;
   outputTokens: number;
   reviewedFiles: number;
+  /** Set when org standards were configured. */
+  standards?: StandardsSummary;
+}
+
+export interface StandardsSummary {
+  /** Ids of the standards sent to the model. */
+  checked: string[];
+  /** Ids that applied but were left out to fit `max-standards-chars`. */
+  dropped: string[];
+  /** The `standards-ref` label, if given. */
+  ref?: string;
+}
+
+/** The summary's "Standards" line: what was checked, at which version, and what wasn't. */
+export function renderStandardsLine({ checked, dropped, ref }: StandardsSummary): string {
+  const parts = [checked.length ? `checked ${checked.join(", ")}` : "none applied to the reviewed files"];
+  if (ref) parts.push(`at \`${ref.replace(/`/g, "")}\``);
+  let line = `**Standards:** ${parts.join(" ")}`;
+  if (dropped.length) line += ` · not checked (over \`max-standards-chars\`): ${dropped.join(", ")}`;
+  return line;
 }
 
 export function renderSummary(
@@ -83,6 +104,7 @@ export function renderSummary(
     : "no issues found";
 
   const parts = [REVIEW_MARKER, "## 🤖 AI review", review.summary, `**Findings:** ${tally}`];
+  if (meta.standards) parts.push(renderStandardsLine(meta.standards));
 
   if (unanchored.length) {
     parts.push("### Findings outside the diff", unanchored.map(renderFindingListItem).join("\n"));

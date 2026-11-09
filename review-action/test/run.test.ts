@@ -1,8 +1,16 @@
+import { fileURLToPath } from "node:url";
+import { betaZodOutputFormat } from "@anthropic-ai/sdk/helpers/beta/zod";
 import { describe, expect, it, vi } from "vitest";
+import { z } from "zod";
+import { annotatePatch } from "../src/diff.js";
+import { buildUserPrompt, STANDARDS_INSTRUCTIONS, SYSTEM_PROMPT } from "../src/prompt.js";
 import { FINDING_BODY_MAX_CHARS, FINDINGS_JSON_MAX_BYTES, findingsJson, run, type ActionIO, type RunDeps } from "../src/run.js";
 import type { Finding } from "../src/schema.js";
 
 const PATCH = "@@ -0,0 +1,2 @@\n+const a = 1;\n+const b = a;";
+
+/** ts/TS-001 (high, src/**), ts/TS-002 (*.py only), testing/TEST-001 (agent only), docs/DOC-001 (low, every file, long). */
+const STANDARDS = fileURLToPath(new URL("./fixtures/standards", import.meta.url));
 
 const finding = (over: Partial<Finding> = {}): Finding => ({
   path: "src/a.ts",
@@ -22,6 +30,10 @@ const DEFAULT_INPUTS: Record<string, string> = {
   "fail-on": "none",
   "max-diff-chars": "400000",
   exclude: "",
+  "standards-path": "",
+  "standards-packs": "",
+  "standards-ref": "",
+  "max-standards-chars": "40000",
 };
 
 /** Builds fake @actions/core, Octokit and Anthropic clients and records what the action does with them. */
@@ -85,8 +97,132 @@ function setup({
     createAnthropic: vi.fn(() => ({ beta: { messages: { stream } } })),
   } as unknown as RunDeps;
 
-  return { deps, io, outputs, pulls, stream };
+  /** The params of the one request sent to the Anthropic client. */
+  const request = () => (stream.mock.calls[0] as unknown[] | undefined)?.[0] as { system: string; messages: { content: string }[] };
+
+  return { deps, io, outputs, pulls, stream, request };
 }
+
+/** The review schema as it was before org standards existed, to pin the request byte for byte. */
+const PRE_STANDARDS_REVIEW_SCHEMA = z.object({
+  summary: z.string().describe("2-4 sentences on what the PR does and its overall risk."),
+  findings: z.array(
+    z.object({
+      path: z.string().describe("File path exactly as shown in the <file path> attribute."),
+      line: z.number().int().describe("New-file line number from the left column of the annotated diff."),
+      category: z.enum(["bug", "security", "missing-tests", "performance", "maintainability"]),
+      severity: z.enum(["low", "medium", "high", "critical"]),
+      title: z.string().describe("One line, under 80 characters."),
+      body: z.string().describe("What is wrong, the concrete failure scenario, and how to fix it. Markdown."),
+    }),
+  ),
+});
+
+describe("run with org standards", () => {
+  it("AC5: sends byte-for-byte the pre-standards request when standards-path is empty", async () => {
+    const { deps, request } = setup({ inputs: { "standards-packs": "ts", "max-standards-chars": "oops" } });
+    await run(deps);
+    const expected = {
+      model: "claude-sonnet-5-5",
+      max_tokens: 64000,
+      betas: ["server-side-fallback-2026-07-01"],
+      fallbacks: "default",
+      thinking: { type: "adaptive" },
+      output_config: { effort: "high", format: betaZodOutputFormat(PRE_STANDARDS_REVIEW_SCHEMA) },
+      system: SYSTEM_PROMPT,
+      messages: [{ role: "user", content: buildUserPrompt({ title: "Add a", body: null }, [{ path: "src/a.ts", ...annotatePatch(PATCH) }]) }],
+    };
+    expect(JSON.stringify(request())).toBe(JSON.stringify(expected));
+    expect(request().system).not.toContain("org_standards");
+  });
+
+  it("AC5: appends only the selected standards to the system prompt", async () => {
+    const { deps, request } = setup({ inputs: { "standards-path": STANDARDS } });
+    await run(deps);
+    const { system, messages } = request();
+    expect(system.startsWith(`${SYSTEM_PROMPT}\n\n${STANDARDS_INSTRUCTIONS}\n\n<org_standards>\n`)).toBe(true);
+    expect(system.endsWith("</standard>\n</org_standards>")).toBe(true);
+    // Most severe first. TS-002 matches no reviewed path and TEST-001 is for the agent only.
+    expect(system.match(/<standard id="[^"]+"/g)).toEqual(['<standard id="TS-001"', '<standard id="DOC-001"']);
+    expect(system).toContain(
+      '<standard id="TS-001" severity="high" title="No any in exports">\nExported functions spell out types: no Promise&lt;any&gt; &amp; no casts.\n</standard>',
+    );
+    // The untrusted user message is unchanged.
+    expect(messages[0]!.content).not.toContain("org_standards");
+    expect(JSON.stringify(request())).toContain('"rule"');
+  });
+
+  it("AC5: sends no standards block when none apply to the reviewed files", async () => {
+    const { deps, pulls, request } = setup({ inputs: { "standards-path": STANDARDS, "standards-packs": "testing" } });
+    await run(deps);
+    expect(request().system).toBe(SYSTEM_PROMPT);
+    expect(pulls.createReview.mock.calls[0]![0].body).toContain("**Standards:** none applied to the reviewed files");
+  });
+
+  it("AC6: keeps a rule naming a sent standard, shows it inline and in findings-json, and drops unknown rules", async () => {
+    const { deps, outputs, pulls } = setup({
+      inputs: { "standards-path": STANDARDS },
+      findings: [
+        finding({ line: 1, rule: "TS-001" }),
+        // TS-002 exists but was not sent: it only applies to Python files.
+        finding({ line: 2, severity: "low", rule: "TS-002" }),
+        finding({ line: 2, severity: "medium", rule: "MADE-UP-1" }),
+      ],
+    });
+    await run(deps);
+
+    const comments = pulls.createReview.mock.calls[0]![0].comments as { line: number; body: string }[];
+    expect(comments.map((c) => c.body.split("\n")[0])).toEqual([
+      "**🐛 Bug · high · TS-001**: Problem",
+      "**🐛 Bug · medium**: Problem",
+      "**🐛 Bug · low**: Problem",
+    ]);
+    const json = JSON.parse(outputs["findings-json"]!) as Record<string, unknown>[];
+    expect(json[0]).toMatchObject({ rule: "TS-001", commentId: 1000 });
+    expect(json.slice(1).every((f) => !("rule" in f))).toBe(true);
+    expect(json).toHaveLength(3);
+  });
+
+  it("AC6: removes rules when no standards were sent", async () => {
+    const { deps, outputs } = setup({ findings: [finding({ rule: "TS-001" })] });
+    await run(deps);
+    expect(JSON.parse(outputs["findings-json"]!)).toEqual([{ ...finding(), commentId: 1000 }]);
+  });
+
+  it("AC7: lists the checked ids, the standards-ref and the ids dropped for budget", async () => {
+    const { deps, io, pulls, request } = setup({
+      inputs: { "standards-path": STANDARDS, "standards-ref": "v1.2.0", "max-standards-chars": "150" },
+    });
+    await run(deps);
+    const body = pulls.createReview.mock.calls[0]![0].body as string;
+    expect(body).toContain("**Standards:** checked TS-001 at `v1.2.0` · not checked (over `max-standards-chars`): DOC-001");
+    expect(io.warning).toHaveBeenCalledWith(expect.stringContaining("Not checking DOC-001"));
+    expect(request().system).not.toContain("DOC-001");
+  });
+
+  it("AC7: loads only the packs named in standards-packs, comma- or newline-separated", async () => {
+    for (const packs of ["ts, testing", "ts\ntesting\n"]) {
+      const { deps, pulls } = setup({ inputs: { "standards-path": STANDARDS, "standards-packs": packs } });
+      await run(deps);
+      const body = pulls.createReview.mock.calls[0]![0].body as string;
+      expect(body).toContain("**Standards:** checked TS-001\n");
+      expect(body).not.toContain("DOC-001");
+    }
+  });
+
+  it.each([
+    [{ "standards-path": STANDARDS, "max-standards-chars": "0" }, /max-standards-chars must be a positive integer/],
+    [{ "standards-path": STANDARDS, "max-standards-chars": "lots" }, /max-standards-chars must be a positive integer/],
+    [{ "standards-path": fileURLToPath(new URL("./fixtures/missing", import.meta.url)) }, /standards directory does not exist/],
+    [{ "standards-path": STANDARDS, "standards-packs": "ts,security" }, /unknown pack "security"; available packs: docs, testing, ts/],
+  ])("AC7: fails before calling Anthropic on %o", async (inputs, error) => {
+    const { deps, stream } = setup({ inputs });
+    await expect(run(deps)).rejects.toThrow(error);
+    expect(deps.createAnthropic).not.toHaveBeenCalled();
+    expect(deps.createOctokit).not.toHaveBeenCalled();
+    expect(stream).not.toHaveBeenCalled();
+  });
+});
 
 describe("run", () => {
   it("reviews the PR, posts inline comments and sets outputs", async () => {

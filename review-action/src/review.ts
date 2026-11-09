@@ -1,8 +1,9 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { betaZodOutputFormat } from "@anthropic-ai/sdk/helpers/beta/zod";
+import type { Standard } from "standards";
 import type { AnnotatedFile } from "./diff.js";
-import { buildUserPrompt, SYSTEM_PROMPT, type PullRequestInfo } from "./prompt.js";
-import { ReviewSchema, type Review } from "./schema.js";
+import { buildSystemPrompt, buildUserPrompt, type PullRequestInfo } from "./prompt.js";
+import { BaseReviewSchema, keepKnownRules, ReviewSchema, type Review } from "./schema.js";
 
 export const EFFORTS = ["low", "medium", "high", "xhigh", "max"] as const;
 export type Effort = (typeof EFFORTS)[number];
@@ -10,6 +11,8 @@ export type Effort = (typeof EFFORTS)[number];
 export interface ReviewOptions {
   model: string;
   effort: Effort;
+  /** Org standards to check the diff against. Findings may only cite these ids as `rule`. */
+  standards?: readonly Standard[];
 }
 
 export interface ReviewResult {
@@ -24,8 +27,10 @@ export async function reviewDiff(
   client: Pick<Anthropic, "beta">,
   pr: PullRequestInfo,
   files: AnnotatedFile[],
-  { model, effort }: ReviewOptions,
+  { model, effort, standards = [] }: ReviewOptions,
 ): Promise<ReviewResult> {
+  // Without standards there is no rule to cite, and the request stays as it was before standards.
+  const schema = standards.length ? ReviewSchema : BaseReviewSchema;
   const stream = client.beta.messages.stream({
     model,
     max_tokens: 64000,
@@ -33,8 +38,8 @@ export async function reviewDiff(
     betas: ["server-side-fallback-2026-07-01"],
     fallbacks: "default",
     thinking: { type: "adaptive" },
-    output_config: { effort, format: betaZodOutputFormat(ReviewSchema) },
-    system: SYSTEM_PROMPT,
+    output_config: { effort, format: betaZodOutputFormat(schema) },
+    system: buildSystemPrompt(standards),
     messages: [{ role: "user", content: buildUserPrompt(pr, files) }],
   });
 
@@ -51,7 +56,7 @@ export async function reviewDiff(
   }
 
   return {
-    review: message.parsed_output,
+    review: keepKnownRules(message.parsed_output, new Set(standards.map((s) => s.id))),
     model: message.model,
     inputTokens: message.usage.input_tokens,
     outputTokens: message.usage.output_tokens,

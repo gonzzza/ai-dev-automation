@@ -1,6 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { annotatePatch } from "../src/diff.js";
-import { anchorFindings, fitBody, MAX_BODY_CHARS, renderSummary, REVIEW_MARKER } from "../src/render.js";
+import {
+  anchorFindings,
+  fitBody,
+  MAX_BODY_CHARS,
+  renderFinding,
+  renderFindingListItem,
+  renderStandardsLine,
+  renderSummary,
+  REVIEW_MARKER,
+} from "../src/render.js";
 import type { Finding } from "../src/schema.js";
 
 const file = { path: "src/a.ts", ...annotatePatch("@@ -1,1 +1,2 @@\n line one\n+line two") };
@@ -34,6 +43,26 @@ describe("anchorFindings", () => {
     const { inline, unanchored } = anchorFindings([outside, otherFile], [file]);
     expect(inline).toEqual([]);
     expect(unanchored).toEqual([outside, otherFile]);
+  });
+});
+
+describe("renderFinding", () => {
+  it("AC6: shows the rule a finding breaks in its header", () => {
+    expect(renderFinding(finding({ rule: "TS-002" }))).toBe("**🐛 Bug · medium · TS-002**: Off by one\n\nLoop skips the last item.");
+    expect(renderFindingListItem(finding({ line: 9, rule: "TS-002" }))).toBe(
+      "- `src/a.ts:9` **🐛 Bug · medium · TS-002**: Off by one Loop skips the last item.",
+    );
+    expect(renderFinding(finding({}))).toBe("**🐛 Bug · medium**: Off by one\n\nLoop skips the last item.");
+  });
+});
+
+describe("renderStandardsLine", () => {
+  it("AC7: lists the checked ids, the ref and the dropped ids", () => {
+    expect(renderStandardsLine({ checked: ["SEC-1", "TS-002"], dropped: ["DOC-1"], ref: "v3" })).toBe(
+      "**Standards:** checked SEC-1, TS-002 at `v3` · not checked (over `max-standards-chars`): DOC-1",
+    );
+    expect(renderStandardsLine({ checked: ["TS-002"], dropped: [] })).toBe("**Standards:** checked TS-002");
+    expect(renderStandardsLine({ checked: [], dropped: [], ref: "a`b" })).toBe("**Standards:** none applied to the reviewed files at `ab`");
   });
 });
 
@@ -77,5 +106,14 @@ describe("renderSummary", () => {
     const body = renderSummary({ summary: "Docs only.", findings: [] }, [], [], meta);
     expect(body).toContain("**Findings:** no issues found");
     expect(body).not.toContain("Files not reviewed");
+    expect(body).not.toContain("**Standards:**");
+  });
+
+  it("AC7: adds the Standards line after the tally when standards were used", () => {
+    const standards = { checked: ["TS-002"], dropped: ["DOC-1"], ref: "abc123" };
+    const body = renderSummary({ summary: "s", findings: [] }, [], [], { ...meta, standards });
+    expect(body).toContain(
+      "**Findings:** no issues found\n\n**Standards:** checked TS-002 at `abc123` · not checked (over `max-standards-chars`): DOC-1",
+    );
   });
 });
