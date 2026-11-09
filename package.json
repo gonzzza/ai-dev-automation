@@ -8,6 +8,7 @@
     "node": ">=24"
   },
   "workspaces": [
+    "standards",
     "demo-app",
     "review-action",
     "agent"

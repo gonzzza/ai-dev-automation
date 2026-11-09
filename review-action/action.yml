@@ -27,6 +27,18 @@ inputs:
   exclude:
     description: "Extra glob patterns to skip, one per line. Lockfiles, dist/, *.map, *.snap and *.min.js are always skipped."
     default: ""
+  standards-path:
+    description: "Directory of org engineering standards to review against (one subdirectory per pack). Check it out from a pinned ref or the PR base, never the PR head. Empty turns the feature off."
+    default: ""
+  standards-packs:
+    description: "Packs to load, comma- or newline-separated. Empty loads all of them."
+    default: ""
+  standards-ref:
+    description: "Label for the version of the standards being applied (a tag or SHA), shown in the review summary."
+    default: ""
+  max-standards-chars:
+    description: "Budget for standards text in the prompt, in characters. Past it, the least severe standards are left out and listed as not checked."
+    default: "40000"
 
 outputs:
   findings:
@@ -34,7 +46,7 @@ outputs:
   highest-severity:
     description: "Highest severity found, or `none`."
   findings-json:
-    description: "The findings as a JSON array (path, line, category, severity, title, body, and commentId for findings posted as inline comments), most severe first, capped at 64 KB so it fits in an env var: long bodies are truncated and the least severe findings dropped first. Model output: validate before acting on it."
+    description: "The findings as a JSON array (path, line, category, severity, title, body, rule for findings that break an org standard, and commentId for findings posted as inline comments), most severe first, capped at 64 KB so it fits in an env var: long bodies are truncated and the least severe findings dropped first. Model output: validate before acting on it."
 
 runs:
   using: "node24"

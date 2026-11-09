@@ -1,7 +1,8 @@
 import type Anthropic from "@anthropic-ai/sdk";
+import { loadStandards, selectStandards, type Standard } from "standards";
 import { DEFAULT_EXCLUDE, selectFiles } from "./diff.js";
 import { inlineCommentIds, publishReview, supersedePreviousReviews, type Octokit } from "./publish.js";
-import { anchorFindings, renderSummary } from "./render.js";
+import { anchorFindings, renderSummary, type StandardsSummary } from "./render.js";
 import { EFFORTS, reviewDiff, type Effort } from "./review.js";
 import { bySeverityDesc, parseFailOn, shouldFail, type Finding } from "./schema.js";
 
@@ -67,6 +68,31 @@ export function findingsJson(findings: Finding[], commentIds: ReadonlyMap<Findin
 
 const errorMessage = (error: unknown) => (error instanceof Error ? error.message : String(error));
 
+export interface StandardsConfig {
+  standards: Standard[];
+  maxChars: number;
+  ref: string;
+}
+
+/**
+ * Read the standards inputs and load the standards. Undefined when `standards-path` is empty, which
+ * turns the feature off. Throws on a bad input, a missing directory or pack, or an invalid standard.
+ */
+export async function readStandardsConfig(io: Pick<ActionIO, "getInput" | "info">): Promise<StandardsConfig | undefined> {
+  const path = io.getInput("standards-path").trim();
+  if (!path) return undefined;
+  const maxChars = Number(io.getInput("max-standards-chars"));
+  if (!Number.isInteger(maxChars) || maxChars <= 0) throw new Error("max-standards-chars must be a positive integer");
+  const packs = io
+    .getInput("standards-packs")
+    .split(/[,\n]/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const standards = await loadStandards(path, packs.length ? packs : undefined);
+  io.info(`Loaded ${standards.length} standard(s) from ${path}.`);
+  return { standards, maxChars, ref: io.getInput("standards-ref").trim() };
+}
+
 /** Validate inputs, review the PR, post the result. Throws on configuration or API errors. */
 export async function run({ io, repo: { owner, repo }, pullRequest: pr, createOctokit, createAnthropic }: RunDeps): Promise<void> {
   const apiKey = io.getInput("anthropic-api-key");
@@ -85,6 +111,7 @@ export async function run({ io, repo: { owner, repo }, pullRequest: pr, createOc
   const maxChars = Number(io.getInput("max-diff-chars"));
   if (!Number.isInteger(maxChars) || maxChars <= 0) throw new Error("max-diff-chars must be a positive integer");
   const exclude = [...DEFAULT_EXCLUDE, ...io.getMultilineInput("exclude").map((s) => s.trim()).filter(Boolean)];
+  const standardsConfig = await readStandardsConfig(io);
 
   const octokit = createOctokit(io.getInput("github-token"));
   const files = await octokit.paginate(octokit.rest.pulls.listFiles, { owner, repo, pull_number: pr.number, per_page: 100 });
@@ -102,15 +129,36 @@ export async function run({ io, repo: { owner, repo }, pullRequest: pr, createOc
     return;
   }
 
+  let standards: Standard[] = [];
+  let standardsSummary: StandardsSummary | undefined;
+  if (standardsConfig) {
+    const { selected, dropped } = selectStandards(standardsConfig.standards, {
+      use: "review",
+      paths: included.map((f) => f.path),
+      maxChars: standardsConfig.maxChars,
+    });
+    standards = selected;
+    const ids = (list: Standard[]) => list.map((s) => s.id);
+    io.info(`Checking ${selected.length} standard(s): ${ids(selected).join(", ") || "none apply"}.`);
+    if (dropped.length) {
+      io.warning(`Not checking ${ids(dropped).join(", ")}: over the max-standards-chars budget (${standardsConfig.maxChars}).`);
+    }
+    standardsSummary = { checked: ids(selected), dropped: ids(dropped), ...(standardsConfig.ref ? { ref: standardsConfig.ref } : {}) };
+  }
+
   const result = await reviewDiff(
     createAnthropic(apiKey),
     { title: String(pr.title ?? ""), body: typeof pr.body === "string" ? pr.body : null },
     included,
-    { model: io.getInput("model"), effort },
+    { model: io.getInput("model"), effort, standards },
   );
   const { findings } = result.review;
   const { inline, anchored, unanchored } = anchorFindings(findings, included);
-  const summary = renderSummary(result.review, unanchored, skipped, { ...result, reviewedFiles: included.length });
+  const summary = renderSummary(result.review, unanchored, skipped, {
+    ...result,
+    reviewedFiles: included.length,
+    standards: standardsSummary,
+  });
 
   const target = { owner, repo, pullNumber: pr.number, commitId: pr.head.sha };
   const published = await publishReview(octokit, target, summary, inline, anchored);
