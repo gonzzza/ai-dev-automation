@@ -74,6 +74,13 @@ describe("isWritable", () => {
     expect(isWritable("demo-app/.git/config", ["demo-app"])).toBe(false);
     expect(isWritable("demo-app/src/a.ts", ["demo-app/"])).toBe(true);
   });
+
+  it("never allows .github, even when a scope covers it", () => {
+    expect(isWritable(".github/workflows/ai-review.yml", [".github"])).toBe(false);
+    expect(isWritable(".github/actions/x/action.yml", [".github/actions"])).toBe(false);
+    // Only the top-level directory GitHub reads: a .github folder inside a package is ordinary code.
+    expect(isWritable("demo-app/.github/notes.md", ["demo-app"])).toBe(true);
+  });
 });
 
 describe("repoRelative", () => {

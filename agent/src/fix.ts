@@ -290,6 +290,8 @@ export function stopComment(reason: string, actionable: Finding[], deferred: Fin
 
 export interface PullRequestInfo {
   state: string;
+  /** As `gh pr view` reports it: a GitHub App's bot is `app/<slug>` with `is_bot` set. */
+  author: { login: string; is_bot?: boolean };
   isCrossRepository: boolean;
   headRefName: string;
   headRefOid: string;
@@ -318,6 +320,8 @@ export interface FixDeps extends GateDeps {
   findings: Finding[];
   /** The commit the findings are about. The fix is refused if the branch has moved since. */
   reviewedSha?: string;
+  /** The slug of the agent's GitHub App. When set, the fix is refused unless that App opened the PR. */
+  agentApp?: string;
   minSeverity: Severity;
   maxCycles: number;
   model: string;
@@ -336,6 +340,14 @@ export type FixResult =
   | { status: "fixed"; cycle: number; commentUrl: string; run: AgentRun<FixReport> };
 
 /**
+ * Whether a GitHub App's bot opened the PR. A user can't be named `app/<slug>`, and `is_bot` rules
+ * out a person who registered the App's slug as a username.
+ */
+export function openedByApp(author: PullRequestInfo["author"], appSlug: string): boolean {
+  return author.is_bot === true && author.login === `app/${appSlug}`;
+}
+
+/**
  * One fix cycle on an open agent PR: findings → agent → the same gates as a new PR → one commit →
  * push → summary comment. The push makes the review run again, which may start the next cycle.
  */
@@ -348,6 +360,10 @@ export async function runFixCycle(deps: FixDeps): Promise<FixResult> {
   if (pr.isCrossRepository) throw new Error(`PR #${pullNumber} comes from a fork; the fix cycle only runs on branches in this repository.`);
   const branch = pr.headRefName;
   if (!branch.startsWith("agent/")) throw new Error(`PR #${pullNumber} is not an agent PR (branch ${branch}); the fix cycle only touches agent/* branches.`);
+  // Anyone who can push can name a branch agent/*. Only the App can open a PR as the App.
+  if (deps.agentApp !== undefined && !openedByApp(pr.author, deps.agentApp)) {
+    throw new Error(`PR #${pullNumber} was opened by ${pr.author.login}, not the agent's App (${deps.agentApp}); the fix cycle only touches the agent's own PRs.`);
+  }
   const current = await git.currentBranch();
   if (current !== branch) throw new Error(`Check out ${branch} first (currently on ${current}).`);
   const dirty = await git.changedFiles();

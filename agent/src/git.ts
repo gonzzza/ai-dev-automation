@@ -147,7 +147,7 @@ export class Git {
   }
 
   async pullRequest(number: number): Promise<PullRequestInfo> {
-    const json = await run(this.exec, "gh", ["pr", "view", String(number), "--json", "state,isCrossRepository,headRefName,headRefOid,baseRefName"], this.cwd);
+    const json = await run(this.exec, "gh", ["pr", "view", String(number), "--json", "state,author,isCrossRepository,headRefName,headRefOid,baseRefName"], this.cwd);
     return JSON.parse(json) as PullRequestInfo;
   }
 

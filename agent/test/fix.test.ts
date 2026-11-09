@@ -7,6 +7,7 @@ import {
   fixTask,
   LINE_TOLERANCE,
   loadFixTemplate,
+  openedByApp,
   parseCycleHistory,
   parseFindings,
   renderFindingsForPrompt,
@@ -204,6 +205,7 @@ function setup({
   agentReport = report(),
   reviewedSha = "abc123" as string | undefined,
   tamperGit = false,
+  agentApp = undefined as string | undefined,
 } = {}) {
   let ran = false;
   let committed = false;
@@ -216,6 +218,7 @@ function setup({
     push: vi.fn(async () => ""),
     pullRequest: vi.fn(async () => ({
       state: "OPEN",
+      author: { login: "app/spec-agent", is_bot: true } as { login: string; is_bot?: boolean },
       isCrossRepository: false,
       headRefName: "agent/001-rate-limiter",
       headRefOid: "abc123",
@@ -233,6 +236,7 @@ function setup({
     pullNumber: 5,
     findings,
     reviewedSha,
+    agentApp,
     minSeverity: "medium",
     maxCycles: 5,
     model: "claude-opus-5-5",
@@ -331,11 +335,17 @@ describe("runFixCycle", () => {
     [{ pr: { headRefName: "feature/x" }, branch: "feature/x" }, "not an agent PR"],
     [{ branch: "main" }, "Check out agent/001-rate-limiter first"],
     [{ head: "old999" }, "Pull first"],
+    [{ agentApp: "spec-agent", pr: { author: { login: "mallory", is_bot: false } } }, "opened by mallory, not the agent's App (spec-agent)"],
   ])("refuses to run when %o", async (options, error) => {
     const { deps, git } = setup(options);
     await expect(runFixCycle(deps)).rejects.toThrow(error);
     expect(deps.runAgent).not.toHaveBeenCalled();
     expect(git.push).not.toHaveBeenCalled();
+  });
+
+  it("runs on a PR the agent's App opened", async () => {
+    const { deps } = setup({ agentApp: "spec-agent" });
+    expect(await runFixCycle(deps)).toMatchObject({ status: "fixed" });
   });
 
   it("skips cleanly, without failing the job, when the branch moved since the review", async () => {
@@ -397,6 +407,21 @@ describe("runFixCycle", () => {
   });
 });
 
+describe("openedByApp", () => {
+  it("accepts the App's bot, as gh reports it", () => {
+    expect(openedByApp({ login: "app/spec-agent", is_bot: true }, "spec-agent")).toBe(true);
+  });
+
+  it.each([
+    [{ login: "spec-agent", is_bot: false }, "a person who registered the App's slug as a username"],
+    [{ login: "app/spec-agent" }, "a login without the bot flag"],
+    [{ login: "app/other-app", is_bot: true }, "another App"],
+    [{ login: "spec-agent[bot]", is_bot: true }, "the REST API's spelling, which gh never reports"],
+  ])("rejects %o (%s)", (author, _why) => {
+    expect(openedByApp(author, "spec-agent")).toBe(false);
+  });
+});
+
 describe("failure categories for the fix cycle", () => {
   // Against the errors runFixCycle really throws, like the pipeline's test, so wording drift breaks a test.
   it.each([
@@ -405,6 +430,7 @@ describe("failure categories for the fix cycle", () => {
     [{ pr: { headRefName: "feature/x" }, branch: "feature/x" }, "preflight"],
     [{ branch: "main" }, "preflight"],
     [{ head: "old999" }, "preflight"],
+    [{ agentApp: "spec-agent", pr: { author: { login: "mallory" } } }, "preflight"],
     [{ tamperGit: true, changed: [] as string[] }, "git-state-changed"],
     [{ changed: ["agent/src/policy.ts"] }, "out-of-scope"],
     [{ agentReport: report({ summary: "Used key sk-test-value-from-the-env" }) }, "secret-found"],

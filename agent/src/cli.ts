@@ -43,7 +43,8 @@ Fix cycle (run on a checked-out agent/* PR branch):
   --findings <file>      The review action's findings-json output
   --reviewed-sha <sha>   Commit the findings are about; refuse if the branch moved since
   --min-severity <level> Findings below this are left for the human. Default: medium
-  --max-cycles <n>       Stop after this many fix commits on the PR. Default: 5`;
+  --max-cycles <n>       Stop after this many fix commits on the PR. Default: 5
+  --agent-app <slug>     Refuse unless this GitHub App opened the PR (the agent's App, in CI)`;
 
 async function main(): Promise<void> {
   const { values, positionals } = parseArgs({
@@ -68,6 +69,7 @@ async function main(): Promise<void> {
       "reviewed-sha": { type: "string" },
       "min-severity": { type: "string", default: "medium" },
       "max-cycles": { type: "string", default: "5" },
+      "agent-app": { type: "string" },
       help: { type: "boolean", short: "h", default: false },
     },
   });
@@ -194,6 +196,7 @@ async function main(): Promise<void> {
         pullNumber,
         findings,
         reviewedSha: values["reviewed-sha"],
+        agentApp: values["agent-app"],
         minSeverity,
         maxCycles,
         model: config.model,
