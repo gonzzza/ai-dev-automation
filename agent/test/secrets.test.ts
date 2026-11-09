@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { resolve } from "node:path";
 import { parseLimit, scopeDir } from "../src/args.js";
-import { checksEnv, findSecrets, isSecretFile, secretValues } from "../src/secrets.js";
+import { checksEnv, findSecrets, isSecretFile, redactSecrets, secretValues } from "../src/secrets.js";
 
 const env = {
   PATH: "/usr/bin",
@@ -80,5 +80,20 @@ describe("checksEnv git isolation", () => {
       GIT_CONFIG_VALUE_1: "false",
     });
     expect(result.GIT_CONFIG_GLOBAL).toMatch(/^(NUL|\/dev\/null)$/);
+  });
+});
+
+describe("redactSecrets", () => {
+  it("replaces values from the environment and known credential formats, everywhere they occur", () => {
+    const text = "a=sk-live-1234567890abcdef b=sk-live-1234567890abcdef c=ghp_abcdefghijklmnopqrstuvwxyz0123456789 d=postgres://u:pw123456@h/db";
+    expect(redactSecrets(text, ["sk-live-1234567890abcdef"])).toBe("a=[REDACTED] b=[REDACTED] c=[REDACTED] d=[REDACTED]h/db");
+  });
+
+  it("replaces the longer of two overlapping values whole", () => {
+    expect(redactSecrets("x=abcdefghijklmnop-extra", ["abcdefghijklmnop", "abcdefghijklmnop-extra"])).toBe("x=[REDACTED]");
+  });
+
+  it("leaves ordinary text alone", () => {
+    expect(redactSecrets("refill resumes after the clock steps back", ["sk-live-1234567890abcdef"])).toBe("refill resumes after the clock steps back");
   });
 });

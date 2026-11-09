@@ -23,6 +23,8 @@ export interface PipelineDeps extends GateDeps {
   base: string;
   model: string;
   dryRun: boolean;
+  /** Goes into the commit trailer and the PR body, to trace the PR back to its audit log. */
+  runId?: string;
   runAgent(spec: Spec): Promise<AgentRun>;
 }
 
@@ -55,12 +57,12 @@ export async function runPipeline(deps: PipelineDeps): Promise<PipelineResult> {
   log(`Agent finished in ${run.turns} turns, $${run.costUsd.toFixed(2)}.`);
 
   const files = await verifyChanges(deps, branch, gitStateBefore);
-  const body = prBody({ spec, run, files, model: deps.model, base, repoUrl: await git.repoUrl() });
+  const body = prBody({ spec, run, files, model: deps.model, base, repoUrl: await git.repoUrl(), runId: deps.runId });
 
   await scanForSecrets(deps, branch, [["the PR body", body]], files);
   if (deps.dryRun) return { status: "dry-run", branch, files, body, run };
 
-  await git.commit(files, commitMessage(spec, run));
+  await git.commit(files, commitMessage(spec, run, deps.runId));
   await git.push(branch);
   const url = await git.openPullRequest(prTitle(spec), body, base, branch);
   return { status: "opened", url, run };

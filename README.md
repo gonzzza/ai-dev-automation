@@ -96,6 +96,7 @@ The agent runs unattended on input that might not be trustworthy, so its limits 
 - **No shell.** The agent can read, write and search files, and it has one tool that runs `npm run check`. A permission hook decides every tool call. Writes are allowed only inside the target directory, never in the files that define how the checks run, and never in files that may hold credentials.
 - **Independent verification.** After the agent finishes, the harness re-runs the checks. It confirms that git's branch, commit, config and hooks are unchanged, that every changed file is in scope, and that nothing in the diff, PR body or comments looks like a credential. If any check fails, nothing is committed. CI then runs the checks again on a clean checkout.
 - **Bounded.** Each run has turn and budget limits. The fix cycle stops after 5 fix commits, or as soon as a finding comes back. It only touches the agent's own branches, and it never merges.
+- **Auditable.** Every run has an id that appears in its commits (`Agent-Run` trailer), PR body and comments. It writes a redacted JSONL audit log with the full transcript, every permission decision and a categorized outcome, and CI keeps that log as an artifact. Metrics come from that log, and the agent can also send OpenTelemetry data to an existing monitoring stack. See [Audit log and monitoring](agent/README.md#audit-log-and-monitoring).
 - **Untrusted input stays data.** Specs, PR diffs and review findings reach the model as data, never as commands to run. The agent has no shell to run them with, and the review action executes nothing from model output. The workflows use least-privilege permissions.
 
 [`agent/README.md`](agent/README.md) has the full list, including what these defenses don't cover. Agent-written tests run on the machine, so the agent belongs in a container or CI job that holds only the secrets it needs.
@@ -133,7 +134,7 @@ The reviewer's findings are advice. The agent may decline a finding with a reaso
 
 - **Reviewer severity varies between runs.** The same clock bug was rated medium, then low, then medium. The severity threshold decides which findings the agent attempts, not what is safe to merge; the human approval decides that.
 - **Not a sandbox.** Agent-written tests can reach the network and the file system of the machine they run on. In CI that's a short-lived runner holding a scoped token, but the boundary is the runner, not the agent.
-- **Cost figures are estimates.** The PR footers show the Agent SDK's estimate from token usage at list prices. The review's footer shows token counts only. The [Console](https://console.anthropic.com/settings/usage) has the actual bill.
+- **Cost figures are estimates.** The PR footers and the audit log show the Agent SDK's estimate from token usage at list prices. The review's footer shows token counts only. The [Console](https://console.anthropic.com/settings/usage) has the actual bill.
 
 ## Development
 

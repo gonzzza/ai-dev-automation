@@ -231,6 +231,8 @@ function setup({
 describe("runFixCycle", () => {
   it("fixes the actionable findings, verifies, commits with trailers, pushes and comments", async () => {
     const { deps, git } = setup({ trailers: "\0" });
+    deps.runId = "run-7";
+    deps.runLink = "https://github.com/o/r/actions/runs/42";
     const result = await runFixCycle(deps);
 
     expect(result).toMatchObject({ status: "fixed", cycle: 1 });
@@ -243,6 +245,8 @@ describe("runFixCycle", () => {
     expect(git.push).toHaveBeenCalledWith("agent/001-rate-limiter");
 
     const comment = git.commentOnPullRequest.mock.calls[0]![1];
+    expect(message).toMatch(/\nAgent-Run: run-7\n$/);
+    expect(comment).toContain("· run [run-7](https://github.com/o/r/actions/runs/42) · a human approves the merge</sub>");
     expect(comment).toContain("**Fix cycle 1 of 5.**");
     expect(comment).toContain("✅ Fixed · medium: Backwards clock jump freezes refill");
     expect(comment).toContain("**Left for human review:**\n\n- low: No concurrency test (`demo-app/src/rate-limiter.ts:73`)");

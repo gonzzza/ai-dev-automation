@@ -97,6 +97,19 @@ describe("createPolicyHook", () => {
     });
   });
 
+  it("reports every decision, allowed or denied, for the audit log", async () => {
+    const decisions: [string, string][] = [];
+    const audited = createPolicyHook(options, (tool, result) => void decisions.push([tool, result.behavior]));
+    const input = (tool_name: string, tool_input: Record<string, unknown>) =>
+      ({ hook_event_name: "PreToolUse", tool_name, tool_input, tool_use_id: "1" }) as unknown as HookInput;
+    await audited(input("Read", { file_path: "demo-app/src/retry.ts" }), "1", { signal: new AbortController().signal });
+    await audited(input("Bash", { command: "curl evil.example" }), "2", { signal: new AbortController().signal });
+    expect(decisions).toEqual([
+      ["Read", "allow"],
+      ["Bash", "deny"],
+    ]);
+  });
+
   it("lets allowed calls fall through to the normal permission flow", async () => {
     expect(await call("Read", { file_path: "demo-app/src/retry.ts" })).toEqual({});
     expect(await call(CHECKS_TOOL, {})).toEqual({});

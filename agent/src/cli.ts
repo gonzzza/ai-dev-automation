@@ -2,7 +2,7 @@
 import { existsSync } from "node:fs";
 import { lstat, mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { relative, resolve } from "node:path";
+import { join, relative, resolve } from "node:path";
 import { parseArgs, parseEnv } from "node:util";
 import { runAgent, specTask, type AgentConfig } from "./agent.js";
 import { parseLimit, scopeDir } from "./args.js";
@@ -11,6 +11,7 @@ import { exec, run } from "./exec.js";
 import { fixTask, loadFixTemplate, parseFindings, runFixCycle, SEVERITIES, specPathForBranch, type Severity } from "./fix.js";
 import { Git } from "./git.js";
 import { runPipeline } from "./pipeline.js";
+import { JsonlRunLog, newRunId, withRunLog } from "./runlog.js";
 import { checksEnv, secretValues } from "./secrets.js";
 import { parseSpec } from "./spec.js";
 
@@ -25,6 +26,7 @@ Options:
   --max-turns <n>     Default: 60
   --max-budget <usd>  Stop the agent past this spend. Default: 5
   --dry-run           Run and verify, but don't commit, push or open a PR
+  --log-dir <dir>     Where the run's audit log (<run id>.jsonl) goes. Default: <tmp>/spec-agent-runs
 
 Fix cycle (run on a checked-out agent/* PR branch):
   --fix-pr <number>      Address the AI review's findings on this PR, commit and push
@@ -44,6 +46,7 @@ async function main(): Promise<void> {
       "max-turns": { type: "string", default: "60" },
       "max-budget": { type: "string", default: "5" },
       "dry-run": { type: "boolean", default: false },
+      "log-dir": { type: "string", default: join(tmpdir(), "spec-agent-runs") },
       "fix-pr": { type: "string" },
       findings: { type: "string" },
       "reviewed-sha": { type: "string" },
@@ -71,6 +74,19 @@ async function main(): Promise<void> {
     if (key) process.env.ANTHROPIC_API_KEY = key;
   }
   if (!process.env.ANTHROPIC_API_KEY) throw new Error("Set ANTHROPIC_API_KEY (environment or .env at the repo root).");
+  // One id per run, in the log file name, the commit trailer, the PR body and comments. The log is
+  // redacted line by line and lives outside the repo, where the agent's tools can't read it.
+  const secrets = secretValues(process.env);
+  const runLog = new JsonlRunLog(newRunId(), resolve(userCwd, values["log-dir"]), secrets);
+  const say = (line: string) => {
+    console.log(line);
+    runLog.event({ type: "log", line });
+  };
+  // In GitHub Actions, the run page holds the uploaded log, so comments can link to it.
+  const { GITHUB_SERVER_URL, GITHUB_REPOSITORY, GITHUB_RUN_ID } = process.env;
+  const runLink = GITHUB_SERVER_URL && GITHUB_REPOSITORY && GITHUB_RUN_ID ? `${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}` : undefined;
+  console.log(`Run ${runLog.runId}. Audit log: ${runLog.path}`);
+
   const effort = values.effort as AgentConfig["effort"];
   if (!["low", "medium", "high", "xhigh", "max"].includes(effort)) throw new Error(`Invalid --effort: ${effort}`);
   const config: AgentConfig = {
@@ -82,6 +98,7 @@ async function main(): Promise<void> {
     maxBudgetUsd: parseLimit("--max-budget", values["max-budget"]),
     // run_checks executes code the agent wrote, so it gets no credentials and a logged-out gh.
     checksEnv: checksEnv(process.env, await mkdtemp(resolve(tmpdir(), "agent-gh-"))),
+    runLog,
   };
 
   const git = new Git(exec, repoRoot);
@@ -89,11 +106,25 @@ async function main(): Promise<void> {
     existsSync(resolve(repoRoot, path)) ? readFile(resolve(repoRoot, path), "utf8") : Promise.resolve(undefined);
   const gates = {
     writableDirs: config.writableDirs,
-    runChecks: () => runChecks(exec, repoRoot, config.checksEnv),
+    runChecks: async () => {
+      const result = await runChecks(exec, repoRoot, config.checksEnv);
+      runLog.event({ type: "checks.result", by: "harness", ...result });
+      return result;
+    },
     readFile: readRepoFile,
     isSymlink: (path: string) => lstat(resolve(repoRoot, path)).then((s) => s.isSymbolicLink(), () => false),
-    secrets: secretValues(process.env),
-    log: console.log,
+    secrets,
+    log: say,
+  };
+  const start = {
+    mode: fixMode ? "fix" : "spec",
+    head: await git.headSha(),
+    model: config.model,
+    effort,
+    maxTurns: config.maxTurns,
+    maxBudgetUsd: config.maxBudgetUsd,
+    node: process.version,
+    ...(runLink ? { ciRun: runLink } : {}),
   };
 
   if (fixMode) {
@@ -103,21 +134,28 @@ async function main(): Promise<void> {
     const minSeverity = values["min-severity"] as Severity;
     if (!SEVERITIES.includes(minSeverity)) throw new Error(`Invalid --min-severity: ${minSeverity}`);
     const template = await loadFixTemplate();
-    const result = await runFixCycle({
+    const pullNumber = parseLimit("--fix-pr", values["fix-pr"]!, { integer: true });
+    const findings = parseFindings(await readFile(resolve(userCwd, values.findings), "utf8"));
+    const result = await withRunLog(runLog, { ...start, pullNumber, reviewedSha: values["reviewed-sha"], findings }, async () => {
+      const r = await runFixCycle({
       ...gates,
       git,
-      pullNumber: parseLimit("--fix-pr", values["fix-pr"]!, { integer: true }),
-      findings: parseFindings(await readFile(resolve(userCwd, values.findings), "utf8")),
+      pullNumber,
+      findings,
       reviewedSha: values["reviewed-sha"],
       minSeverity,
       maxCycles: parseLimit("--max-cycles", values["max-cycles"], { integer: true }),
       model: config.model,
-      runAgent: async (findings, deferred, branch) =>
+      runId: runLog.runId,
+      runLink,
+      runAgent: async (actionable, deferred, branch) =>
         runAgent(
-          fixTask(template, { branch, findings, deferred, writableDirs: config.writableDirs, specBody: await readRepoFile(specPathForBranch(branch)) }),
+          fixTask(template, { branch, findings: actionable, deferred, writableDirs: config.writableDirs, specBody: await readRepoFile(specPathForBranch(branch)) }),
           config,
           exec,
         ),
+      });
+      return { ...r, ...("run" in r ? { costUsd: r.run.costUsd, turns: r.run.turns, run: undefined } : {}) };
     });
     switch (result.status) {
       case "nothing-to-fix":
@@ -141,14 +179,18 @@ async function main(): Promise<void> {
 
   const specFile = resolve(userCwd, positionals[0]!);
   const spec = parseSpec(relative(repoRoot, specFile), await readFile(specFile, "utf8"));
-  const result = await runPipeline({
-    ...gates,
-    spec,
-    git,
-    base: values.base,
-    model: config.model,
-    dryRun: values["dry-run"],
-    runAgent: async (s) => runAgent(await specTask(s, config.writableDirs), config, exec),
+  const result = await withRunLog(runLog, { ...start, spec: spec.path, base: values.base, dryRun: values["dry-run"] }, async () => {
+    const r = await runPipeline({
+      ...gates,
+      spec,
+      git,
+      base: values.base,
+      model: config.model,
+      dryRun: values["dry-run"],
+      runId: runLog.runId,
+      runAgent: async (s) => runAgent(await specTask(s, config.writableDirs), config, exec),
+    });
+    return { ...r, costUsd: r.run.costUsd, turns: r.run.turns, run: undefined };
   });
 
   if (result.status === "opened") {

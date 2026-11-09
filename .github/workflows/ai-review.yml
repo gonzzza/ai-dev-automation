@@ -92,4 +92,15 @@ jobs:
           gh auth setup-git # the harness pushes through gh's credential helper, which reads GH_TOKEN
           printf '%s' "$FINDINGS" > "$RUNNER_TEMP/findings.json"
           npm run agent -- --fix-pr "$PR_NUMBER" --findings "$RUNNER_TEMP/findings.json" \
-            --reviewed-sha "$REVIEWED_SHA" --model "$AGENT_MODEL" --max-cycles 5 --max-budget 3
+            --reviewed-sha "$REVIEWED_SHA" --model "$AGENT_MODEL" --max-cycles 5 --max-budget 3 \
+            --log-dir "$RUNNER_TEMP/agent-logs"
+      # The audit log: the transcript, every policy decision, and the outcome, redacted. Uploaded
+      # even when the run fails, which is when it matters most. The PR comment links to this run.
+      - name: Upload audit log
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: agent-run-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/agent-logs/
+          if-no-files-found: ignore
+          retention-days: 30
