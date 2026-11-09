@@ -23,7 +23,8 @@ describe("Git, against a real repo", () => {
   });
   afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
-  it("is stable, and changes on a commit, a branch switch, a config change or a new hook", async () => {
+  // Dozens of real git processes: slow on Windows, so more than Vitest's 5 s default.
+  it("is stable, and changes on a commit, a branch switch, a config change or a new hook", { timeout: 30_000 }, async () => {
     const git = new Git(exec, dir);
     const before = await git.fingerprint();
     expect(await git.fingerprint()).toBe(before);
