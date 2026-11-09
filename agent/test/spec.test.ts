@@ -40,10 +40,23 @@ describe("parseSpec", () => {
   });
 
   describe("acceptance criteria", () => {
-    it("returns each criterion with its ID, stopping at the next section", () => {
+    it("returns each criterion with its ID and wrapped lines joined, stopping at the next section", () => {
       expect(parseSpec("specs/a.md", VALID).criteria).toEqual([
         { id: "AC1", text: "A new limiter is full." },
-        { id: "AC2", text: "Refill is continuous," },
+        { id: "AC2", text: "Refill is continuous, including fractional tokens." },
+      ]);
+    });
+
+    it("joins nested bullets into their criterion, but not prose after a blank line", () => {
+      const body = VALID.replace("- AC2", "  - for every option\n\nIndented after a gap:\n  ignored\n- AC2");
+      expect(parseSpec("specs/a.md", body).criteria[0]).toEqual({ id: "AC1", text: "A new limiter is full. - for every option" });
+    });
+
+    it("ignores bullets inside fenced code blocks", () => {
+      const body = VALID.replace("- AC2", "```ts\n- not a criterion\n```\n- AC2");
+      expect(parseSpec("specs/a.md", body).criteria).toEqual([
+        { id: "AC1", text: "A new limiter is full." },
+        { id: "AC2", text: "Refill is continuous, including fractional tokens." },
       ]);
     });
 

@@ -52,18 +52,35 @@ function section(body: string, name: string): string[] {
 
 /**
  * Every top-level bullet is one criterion and must start with a unique ID: "- AC1: ...".
- * Prose between bullets is allowed; a criterion without an ID is not, since nothing could reference it.
+ * Indented lines right below a bullet continue it and are joined into its text. Prose between
+ * bullets and fenced code blocks are allowed and ignored; a criterion without an ID is not,
+ * since nothing could reference it.
  */
 function parseCriteria(path: string, lines: string[]): Criterion[] {
   const criteria: Criterion[] = [];
+  // The criterion still collecting continuation lines; a blank line, prose or a fence ends it.
+  let open: Criterion | undefined;
+  let inFence = false;
   for (const line of lines) {
+    if (/^\s*(```|~~~)/.test(line)) {
+      inFence = !inFence;
+      open = undefined;
+      continue;
+    }
+    if (inFence) continue;
+
     const bullet = TOP_LEVEL_BULLET.exec(line);
-    if (!bullet) continue;
+    if (!bullet) {
+      if (open && /^\s+\S/.test(line)) open.text += ` ${line.trim()}`;
+      else open = undefined;
+      continue;
+    }
     const match = CRITERION.exec(bullet[1]!.trim());
     if (!match) throw new Error(`${path}: acceptance criterion needs an ID, e.g. "- AC${criteria.length + 1}: ...": ${line.trim()}`);
     const [, id, text] = match;
     if (criteria.some((c) => c.id === id)) throw new Error(`${path}: duplicate acceptance criterion ID ${id}`);
-    criteria.push({ id: id!, text: text!.trim() });
+    open = { id: id!, text: text!.trim() };
+    criteria.push(open);
   }
   if (!criteria.length) throw new Error(`${path}: acceptance criteria must list at least one "- AC1: ..." bullet`);
   return criteria;
