@@ -1,4 +1,5 @@
-import { isAbsolute, relative, resolve } from "node:path";
+import { existsSync, realpathSync } from "node:fs";
+import { basename, dirname, isAbsolute, join, relative, resolve } from "node:path";
 import type { CanUseTool, HookCallback, PermissionResult } from "@anthropic-ai/claude-agent-sdk";
 import { isSecretFile } from "./secrets.js";
 
@@ -16,9 +17,26 @@ export interface PolicyOptions {
   writableDirs: string[];
 }
 
-/** Repo-relative, forward-slash path, or null if `target` is outside the repo. */
+/**
+ * The real location of `path`, with symlinks resolved, so a link inside the repo that points
+ * outside it is seen as outside. A path that doesn't exist yet (a new file) resolves through
+ * its nearest existing ancestor.
+ */
+function realLocation(path: string): string {
+  let existing = path;
+  const rest: string[] = [];
+  while (!existsSync(existing)) {
+    const parent = dirname(existing);
+    if (parent === existing) return path;
+    rest.unshift(basename(existing));
+    existing = parent;
+  }
+  return join(realpathSync.native(existing), ...rest);
+}
+
+/** Repo-relative, forward-slash path, or null if `target` is outside the repo, symlinks included. */
 export function repoRelative(repoRoot: string, target: string): string | null {
-  const rel = relative(repoRoot, resolve(repoRoot, target));
+  const rel = relative(realLocation(resolve(repoRoot)), realLocation(resolve(repoRoot, target)));
   if (rel === "") return ".";
   if (rel.startsWith("..") || isAbsolute(rel)) return null;
   return rel.replace(/\\/g, "/");
@@ -59,10 +77,16 @@ export function decide(toolName: string, input: Record<string, unknown>, { repoR
 
   if (READ_TOOLS.has(toolName) || WRITE_TOOLS.has(toolName)) {
     const raw = targetPath(input) ?? ".";
-    const path = repoRelative(repoRoot, raw);
-    if (path === null) return deny(`${raw} is outside the repository.`);
     // Glob's pattern and Grep's glob filter are file globs; they must not climb out of the repo.
     const glob = toolName === "Glob" ? input.pattern : toolName === "Grep" ? input.glob : undefined;
+    // The tools expand a leading ~ to the home directory, which path.resolve does not: deny it outright.
+    for (const value of [raw, glob]) {
+      if (typeof value === "string" && (value.startsWith("~") || value.includes("$"))) {
+        return deny(`Paths starting with ~ or containing $ are not allowed: ${value}. Use paths inside the repository.`);
+      }
+    }
+    const path = repoRelative(repoRoot, raw);
+    if (path === null) return deny(`${raw} is outside the repository.`);
     if (typeof glob === "string" && (isAbsolute(glob) || glob.split(/[\\/]/).includes(".."))) {
       return deny(`File globs must stay inside the repository: ${glob}`);
     }

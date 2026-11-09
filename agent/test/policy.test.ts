@@ -1,4 +1,6 @@
-import { resolve } from "node:path";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { HookInput } from "@anthropic-ai/claude-agent-sdk";
 import { CHECKS_TOOL, createPolicyHook, decide, isWritable, repoRelative } from "../src/policy.js";
@@ -105,5 +107,32 @@ describe("secret globs", () => {
     expect(allowed("Grep", { pattern: "KEY", path: ".", glob: "**/.npmrc" })).toBe(false);
     expect(allowed("Grep", { pattern: "BEGIN", glob: "*.pem" })).toBe(false);
     expect(allowed("Grep", { pattern: "env", glob: "**/*.ts" })).toBe(true);
+  });
+});
+
+describe("paths that resolve outside the repo", () => {
+  it("denies ~ paths, which the tools expand to the home directory, and $ in paths", () => {
+    expect(allowed("Read", { file_path: "~/.aws/credentials" })).toBe(false);
+    expect(allowed("Grep", { pattern: "key", path: "~/.ssh" })).toBe(false);
+    expect(allowed("Glob", { pattern: "~/**" })).toBe(false);
+    expect(allowed("Read", { file_path: "$HOME/.netrc" })).toBe(false);
+  });
+
+  it("follows symlinks, so a link inside the repo to a directory outside it is denied", () => {
+    const base = mkdtempSync(join(tmpdir(), "agent-policy-"));
+    try {
+      const repo = join(base, "repo");
+      const outside = join(base, "outside");
+      mkdirSync(join(repo, "demo-app"), { recursive: true });
+      mkdirSync(outside);
+      writeFileSync(join(outside, "secret.txt"), "s");
+      symlinkSync(outside, join(repo, "demo-app", "link"), "junction");
+      const opts = { repoRoot: repo, writableDirs: ["demo-app"] };
+      expect(decide("Read", { file_path: join(repo, "demo-app", "link", "secret.txt") }, opts).behavior).toBe("deny");
+      expect(decide("Write", { file_path: "demo-app/link/new.ts" }, opts).behavior).toBe("deny");
+      expect(decide("Write", { file_path: "demo-app/src/new.ts" }, opts).behavior).toBe("allow");
+    } finally {
+      rmSync(base, { recursive: true, force: true });
+    }
   });
 });

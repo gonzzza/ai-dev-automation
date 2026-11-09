@@ -53,7 +53,7 @@ The agent's tools are limited in code, so the limits don't depend on the model f
 
 - **No shell.** It has only `Read`, `Write`, `Edit`, `Glob` and `Grep`. To run lint, typecheck and tests it calls `run_checks`, a tool served by an in-process MCP server that runs one fixed command.
 - **Permission policy** ([`src/policy.ts`](src/policy.ts)). It runs as a `PreToolUse` hook, which sees every tool call. (`canUseTool` alone isn't enough, because Claude Code can approve reads inside the working directory without calling it.) The rules:
-  - Reads are allowed only inside the repo.
+  - Reads are allowed only inside the repo. Symlinks are resolved first, and paths starting with `~` or containing `$` are denied, since the tools would expand them.
   - No path or glob may name a file that can hold credentials: `.env*` other than `.env.example`, `CLAUDE.local.md`, `.npmrc`, key files. This is a best-effort name check. A Grep across a whole directory relies on ripgrep skipping gitignored files, and the secret scan below backs it up.
   - Writes are allowed only inside `--scope`, and never in `node_modules`, `.git`, or the files that define how the checks run (`package.json`, `tsconfig*.json`, Vitest and ESLint config). This stops the agent from turning the harness's own check into a no-op.
   - Every other call is denied. The reason goes back to the model so it can correct course.
