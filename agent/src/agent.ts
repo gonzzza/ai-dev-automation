@@ -8,6 +8,8 @@ import type { Exec } from "./exec.js";
 import type { RunLog } from "./runlog.js";
 import { AGENT_TOOLS, CHECKS_TOOL, createPolicyHook, createToolPolicy } from "./policy.js";
 import type { Spec } from "./spec.js";
+import { systemPromptOption } from "./standards.js";
+import type { Standard } from "standards";
 
 export const AgentReportSchema = z.object({
   plan: z.array(z.string()).describe("The steps you planned, in order, one short sentence each."),
@@ -34,6 +36,8 @@ export interface AgentConfig {
   sandbox?: Sandbox;
   /** Audit log: every SDK message (the transcript) and every policy decision. */
   runLog?: RunLog;
+  /** Org standards, appended to the system prompt. Trusted operator input, unlike the spec and findings. */
+  standards?: Standard[];
 }
 
 export interface AgentRun<Report = AgentReport> {
@@ -92,14 +96,14 @@ export function describeMessage(message: SDKMessage, repoRoot?: string): string 
   return lines.length ? lines.join("\n") : undefined;
 }
 
-export async function runAgent<Report>(
-  task: AgentTask<Report>,
-  config: AgentConfig,
-  exec: Exec,
-  log: (line: string) => void = console.log,
-): Promise<AgentRun<Report>> {
+/**
+ * The SDK options for one session: limits, the system prompt with any org standards, the tool
+ * allowlist and the policy wiring. Separate from runAgent so tests can check the guardrails are
+ * actually attached without starting a session.
+ */
+export function agentOptions<Report>(task: AgentTask<Report>, config: AgentConfig, exec: Exec): Options {
   const policy = { repoRoot: config.repoRoot, writableDirs: config.writableDirs };
-  const options: Options = {
+  return {
     cwd: config.repoRoot,
     model: config.model,
     effort: config.effort,
@@ -107,7 +111,9 @@ export async function runAgent<Report>(
     maxBudgetUsd: config.maxBudgetUsd,
     // Load the repo's CLAUDE.md for conventions; skip user and local settings so runs are reproducible.
     settingSources: ["project"],
-    systemPrompt: { type: "preset", preset: "claude_code" },
+    // The standards come from the operator and are trusted, so they go in the system prompt. The
+    // spec body and findings stay in the user prompt, as untrusted input.
+    systemPrompt: systemPromptOption(config.standards ?? []),
     tools: AGENT_TOOLS,
     mcpServers: { repo: createChecksServer(exec, config.repoRoot, config.checksEnv, config.sandbox) },
     // The policy runs as a PreToolUse hook, which sees every tool call, and again as canUseTool for
@@ -129,7 +135,15 @@ export async function runAgent<Report>(
     outputFormat: { type: "json_schema", schema: z.toJSONSchema(task.schema, { target: "draft-7" }) as Record<string, unknown> },
     persistSession: false,
   };
+}
 
+export async function runAgent<Report>(
+  task: AgentTask<Report>,
+  config: AgentConfig,
+  exec: Exec,
+  log: (line: string) => void = console.log,
+): Promise<AgentRun<Report>> {
+  const options = agentOptions(task, config, exec);
   config.runLog?.event({ type: "agent.start", model: config.model, effort: config.effort, maxTurns: config.maxTurns, maxBudgetUsd: config.maxBudgetUsd, prompt: task.prompt });
   for await (const message of query({ prompt: task.prompt, options })) {
     config.runLog?.event({ type: "sdk.message", message });

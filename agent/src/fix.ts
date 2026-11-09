@@ -20,6 +20,8 @@ export const FindingSchema = z.object({
   severity: z.enum(SEVERITIES),
   title: z.string(),
   body: z.string(),
+  /** The org standard the finding says is broken, e.g. "TS-002". The fixer finds its text in the system prompt. */
+  rule: z.string().optional(),
   /** The inline review comment that holds the finding, when there is one: the fix cycle replies on its thread. */
   commentId: z.number().int().positive().optional(),
 });
@@ -27,7 +29,7 @@ export type Finding = z.infer<typeof FindingSchema>;
 
 /** Bounds on what reaches the prompt. Over-long input is trimmed, not rejected, so a big review still gets fixed. */
 export const MAX_FINDINGS = 50;
-const FIELD_LIMITS = { path: 500, category: 50, title: 300, body: 20_000 } as const;
+const FIELD_LIMITS = { path: 500, category: 50, rule: 50, title: 300, body: 20_000 } as const;
 const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0, max)}…` : text);
 
 export function parseFindings(json: string): Finding[] {
@@ -44,6 +46,7 @@ export function parseFindings(json: string): Finding[] {
     ...f,
     path: clip(f.path, FIELD_LIMITS.path),
     category: clip(f.category, FIELD_LIMITS.category),
+    ...(f.rule !== undefined ? { rule: clip(f.rule, FIELD_LIMITS.rule) } : {}),
     title: clip(f.title, FIELD_LIMITS.title),
     body: clip(f.body, FIELD_LIMITS.body),
   }));
@@ -150,7 +153,7 @@ export function decideFix(
   return { action: "fix", cycle: (history.at(-1)?.cycle ?? 0) + 1, actionable, deferred };
 }
 
-const escapeXml = (text: string) => text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+const escapeXml = (text: string) => text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
 /**
  * Findings as tagged blocks for the prompt. Escaped, so a finding can't close its tag and add instructions.
@@ -160,7 +163,7 @@ export function renderFindingsForPrompt(findings: Finding[], idPrefix = ""): str
   return findings
     .map(
       (f, i) =>
-        `<finding id="${idPrefix}${i + 1}" severity="${f.severity}" category="${escapeXml(f.category)}" path="${escapeXml(f.path)}" line="${f.line}">\n` +
+        `<finding id="${idPrefix}${i + 1}" severity="${f.severity}" category="${escapeXml(f.category)}" path="${escapeXml(f.path)}" line="${f.line}"${f.rule !== undefined ? ` rule="${escapeXml(f.rule)}"` : ""}>\n` +
         `${escapeXml(f.title)}\n\n${escapeXml(f.body)}\n</finding>`,
     )
     .join("\n\n");

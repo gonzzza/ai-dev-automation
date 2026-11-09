@@ -95,6 +95,26 @@ jobs:
       # Pulled up front so the agent's first check isn't slowed by the download.
       - name: Pull the checks sandbox image
         run: docker pull node:24-bookworm
+      # The org standards from the PR's base commit, as the review job reads them, so the fixer
+      # follows the rules the review checks. Extracted outside the repo: the harness rejects
+      # untracked files in the checkout. Empty when the base has none, which turns them off.
+      - name: Extract org standards from the base commit
+        id: standards
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          # A missing commit is a broken checkout, not "no standards": fetch it, and fail if that fails.
+          if ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+            git fetch --no-tags --depth=1 origin "$BASE_SHA" ||
+              { echo "::error::Base commit $BASE_SHA is not available, so the fixer can't get the org standards."; exit 1; }
+          fi
+          if git cat-file -e "$BASE_SHA:org-standards" 2>/dev/null; then
+            mkdir -p "$RUNNER_TEMP/standards"
+            git archive "$BASE_SHA" org-standards | tar -x -C "$RUNNER_TEMP/standards"
+            echo "path=$RUNNER_TEMP/standards/org-standards" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::The base commit has no org-standards/; the fix cycle runs without standards."
+          fi
       - name: Fix cycle
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -103,7 +123,13 @@ jobs:
           FINDINGS: ${{ needs.review.outputs.findings-json }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
           REVIEWED_SHA: ${{ github.event.pull_request.head.sha }}
+          STANDARDS_PATH: ${{ steps.standards.outputs.path }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
+          standards=()
+          if [ -n "$STANDARDS_PATH" ]; then
+            standards=(--standards "$STANDARDS_PATH" --standards-ref "$BASE_SHA")
+          fi
           if [ "$AGENT_MODEL" = "$REVIEW_MODEL" ]; then
             echo "::warning::The agent and the reviewer both use $AGENT_MODEL. The review is less independent; see 'Why two models' in the README."
           fi
@@ -113,7 +139,7 @@ jobs:
           printf '%s' "$FINDINGS" > "$RUNNER_TEMP/findings.json"
           npm run agent -- --fix-pr "$PR_NUMBER" --findings "$RUNNER_TEMP/findings.json" \
             --reviewed-sha "$REVIEWED_SHA" --model "$AGENT_MODEL" --max-cycles 5 --max-budget 3 \
-            --log-dir "$RUNNER_TEMP/agent-logs" --sandbox docker
+            --log-dir "$RUNNER_TEMP/agent-logs" --sandbox docker "${standards[@]}"
       # The audit log: the transcript, every policy decision, and the outcome, redacted. Uploaded
       # even when the run fails, which is when it matters most. The PR comment links to this run.
       - name: Upload audit log

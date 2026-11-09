@@ -10,6 +10,8 @@ flowchart LR
   review -- "findings ≥ medium" --> fix["Agent fixes or declines<br/>(up to 5 cycles)"]
   fix -- "push" --> review
   review -- "only low findings, or none" --> human["Human approves<br/>and merges"]
+  standards[("Org standards<br/>(pinned version)")] -.-> agent
+  standards -.-> review
 ```
 
 AI coding agents are fast, but unattended they are hard to trust. This repo shows one way to make them trustworthy: the agent works from a written spec, guardrails enforced in code and checked in CI limit what it can do, a second model reviews every change, and a person still approves every merge.
@@ -37,6 +39,8 @@ That history is the point of the demo. The automation caught a real bug, made a 
 | [`specs/`](specs) | Feature specs, the agent's input. [`specs/README.md`](specs/README.md) has the template. |
 | [`.claude/skills/write-spec/`](.claude/skills/write-spec/SKILL.md) | A Claude Code skill, `/write-spec <idea>`, that turns a rough idea into a spec: grounded in the code, with the open questions settled and every acceptance criterion testable. |
 | [`demo-app/`](demo-app) | A small TypeScript library the agent works on. |
+| [`org-standards/`](org-standards) | Sample org engineering standards. **A stand-in for a separate platform repo**, kept here so the demo is self-contained. See [Org standards](#org-standards). |
+| [`standards/`](standards) | The parser and selector for those standards, shared by the agent and the review action. |
 
 ## Setup
 
@@ -89,6 +93,50 @@ To run the review and the fix cycle on the PR in CI, add two repository secrets:
 | `AGENT_GITHUB_TOKEN` | The fix cycle's push and PR comment. A [fine-grained token](https://github.com/settings/personal-access-tokens/new) for this repository only, with *Contents* and *Pull requests* set to read and write. A push made with the workflow's own token wouldn't trigger the next review. |
 
 Without `AGENT_GITHUB_TOKEN`, the review still runs and only the fix cycle fails. On a fork, also enable GitHub Actions under the fork's **Actions** tab, since forks start with workflows disabled.
+
+## Org standards
+
+Every repo's agent and review follow the same engineering standards, kept in one place and owned by the platform team. A standard is a short markdown file with an id, a severity and the files it applies to ([format](org-standards/README.md)):
+
+- **The agent** gets them in its system prompt, so the code it writes follows them from the start. Spec and fix runs both get them.
+- **The review** checks each PR against the standards that apply to its changed files. A finding that breaks one cites it, e.g. `🐛 Bug · medium · TS-002`.
+- **Every run records which standards it used, at which version:** the review summary, the agent's PR body and its audit log.
+
+**In this repo**, the standards live in [`org-standards/`](org-standards) so the demo is self-contained. The review job and the fix job both read them from the PR's base commit, so a PR can't change the rules it's reviewed and fixed against.
+
+**In an enterprise setup**, they belong in their own repository, for example `acme/engineering-standards`:
+
+- The platform team owns it through CODEOWNERS, and changes to a standard are reviewed like code.
+- Each repo pins a tag (`v3.2.0`, never a branch), so reviews are reproducible. New standards arrive through a version-bump PR, for example from Renovate, that the team can review.
+- Each repo picks the packs that fit its stack (`typescript`, `testing`, `api`, …).
+
+The workflow checks out the pinned standards next to the code and passes the path to the action:
+
+```yaml
+steps:
+  - uses: actions/create-github-app-token@v2   # read access to the standards repo
+    id: app
+    with:
+      app-id: ${{ vars.STANDARDS_APP_ID }}
+      private-key: ${{ secrets.STANDARDS_APP_KEY }}
+      owner: acme
+      repositories: engineering-standards
+  - uses: actions/checkout@v7
+    with:
+      repository: acme/engineering-standards
+      ref: v3.2.0
+      path: .standards
+      token: ${{ steps.app.outputs.token }}
+      persist-credentials: false
+  - uses: gonzzza/ai-dev-automation/review-action@v1
+    with:
+      anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+      standards-path: .standards
+      standards-packs: typescript,testing
+      standards-ref: v3.2.0
+```
+
+The agent takes the same checkout: `--standards .standards --standards-ref v3.2.0`. Standards are trusted input, so they go in the system prompt, and they must come from a pinned ref or the base branch, never from the PR being reviewed.
 
 ## How it stays safe
 

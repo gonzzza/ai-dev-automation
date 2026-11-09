@@ -57226,7 +57226,7 @@ async function loadStandards(dir, packs) {
 import { matchesGlob } from "node:path";
 var standardSize = (s) => s.id.length + s.title.length + s.body.length;
 var severityRank = (s) => SEVERITIES.indexOf(s.severity);
-var applies = (s, paths) => s.appliesTo.length === 0 || paths.some((path9) => s.appliesTo.some((glob2) => matchesGlob(path9, glob2)));
+var applies = (s, paths) => paths === void 0 || s.appliesTo.length === 0 || paths.some((path9) => s.appliesTo.some((glob2) => matchesGlob(path9, glob2)));
 function selectStandards(standards, { use, paths, maxChars }) {
   if (!Number.isInteger(maxChars) || maxChars <= 0) throw new RangeError(`maxChars must be a positive integer; got ${maxChars}`);
   const selected = standards.filter((s) => s.use.includes(use) && applies(s, paths)).sort((a, b) => severityRank(b) - severityRank(a) || a.id.localeCompare(b.id, "en", { numeric: true }));

@@ -146,6 +146,14 @@ describe("runPipeline", () => {
     expect(git.push).not.toHaveBeenCalled();
   });
 
+  it("AC6: passes the standards from its deps through to the PR body", async () => {
+    const { deps, git } = setup();
+    deps.standards = { checked: ["TS-003"], dropped: ["TEST-001"], ref: "abc123" };
+    await runPipeline(deps);
+    const body = git.openPullRequest.mock.calls[0]![1];
+    expect(body).toContain("## Standards\n\n- Given to the agent: `TS-003`\n- Version: `abc123`\n- Not given to the agent (over the size budget): `TEST-001`");
+  });
+
   it("dry run verifies but does not commit, push or open a PR", async () => {
     const { deps, git } = setup({ dryRun: true });
     const result = await runPipeline(deps);

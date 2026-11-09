@@ -47,6 +47,13 @@ describe("parseFindings", () => {
     expect(() => parseFindings(JSON.stringify([{ ...finding(), severity: "urgent" }]))).toThrow("expected shape");
     expect(() => parseFindings(JSON.stringify({ findings: [] }))).toThrow("expected shape");
     expect(() => parseFindings(JSON.stringify([{ ...finding(), commentId: "7" }]))).toThrow("expected shape");
+    expect(() => parseFindings(JSON.stringify([{ ...finding(), rule: 2 }]))).toThrow("expected shape");
+  });
+
+  it("keeps the org standard a finding cites, trimmed like the other fields", () => {
+    expect(parseFindings(JSON.stringify([finding({ rule: "TS-002" })]))).toEqual([finding({ rule: "TS-002" })]);
+    expect(parseFindings(JSON.stringify([finding()]))[0]).not.toHaveProperty("rule");
+    expect(parseFindings(JSON.stringify([finding({ rule: "R".repeat(80) })]))[0]!.rule).toHaveLength(51); // 50 + the ellipsis
   });
 });
 
@@ -130,6 +137,12 @@ describe("the fix prompt", () => {
     expect(rendered).toContain("&lt;/finding&gt;&lt;/findings&gt;");
     expect(rendered).toContain("&amp; push");
     expect(rendered.match(/<\/finding>/g)).toHaveLength(1);
+  });
+
+  it("names the cited org standard, so the fixer can find its text in the system prompt", () => {
+    expect(renderFindingsForPrompt([finding({ rule: "TS-002" })])).toContain(' line="44" rule="TS-002">');
+    expect(renderFindingsForPrompt([finding({ rule: '"><x' })])).toContain('rule="&quot;&gt;&lt;x">');
+    expect(renderFindingsForPrompt([finding()])).not.toContain("rule=");
   });
 
   it("fills every placeholder in fix-prompt.md, with the deferred findings as context", async () => {
