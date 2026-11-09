@@ -35,6 +35,7 @@ That history is the point of the demo. The automation caught a real bug, made a 
 | [`review-action/`](review-action) | A GitHub Action that reviews a PR's diff with Claude and posts inline comments on bugs, security issues and missing tests. Other repositories can use it on its own. |
 | [`.github/workflows/`](.github/workflows) | CI (`npm run check`) and the AI review with the fix cycle, both running on this repo's own PRs. |
 | [`specs/`](specs) | Feature specs, the agent's input. [`specs/README.md`](specs/README.md) has the template. |
+| [`.claude/skills/write-spec/`](.claude/skills/write-spec/SKILL.md) | A Claude Code skill, `/write-spec <idea>`, that turns a rough idea into a spec: grounded in the code, with the open questions settled and every acceptance criterion testable. |
 | [`demo-app/`](demo-app) | A small TypeScript library the agent works on. |
 
 ## Setup
@@ -71,14 +72,14 @@ You need Node 24 or later, `git`, an authenticated [`gh`](https://cli.github.com
 ```sh
 git clone https://github.com/<you>/ai-dev-automation && cd ai-dev-automation
 npm ci
-npm run check                      # lint, typecheck and tests in every workspace
+npm run check                      # lint, typecheck, tests in every workspace, and spec validation
 
 export ANTHROPIC_API_KEY=sk-ant-...
 npm run agent -- specs/001-rate-limiter.md --dry-run   # implement and verify, no commit
 npm run agent -- specs/001-rate-limiter.md             # open the PR
 ```
 
-The agent creates the branch `agent/001-rate-limiter`, so delete that branch first if it already exists. To write your own spec, copy the template in [`specs/README.md`](specs/README.md).
+The agent creates the branch `agent/001-rate-limiter`, so delete that branch first if it already exists. To write your own spec, run `/write-spec <your idea>` in Claude Code, or copy the template in [`specs/README.md`](specs/README.md).
 
 To run the review and the fix cycle on the PR in CI, add two repository secrets:
 

@@ -22,9 +22,10 @@ Run from the repo root (npm workspaces):
 
 ```sh
 npm ci              # install
-npm run check       # lint + typecheck + tests: run before every commit
+npm run check       # lint + typecheck + tests + spec:check: run before every commit
 npm test            # tests in all workspaces
 npm test -w demo-app
+npm run spec:check  # validate every spec in specs/ with the agent's parser
 npm run build       # build all workspaces (review-action bundles to dist/)
 ```
 
@@ -42,7 +43,7 @@ npm run build       # build all workspaces (review-action bundles to dist/)
 - **`review-action/dist/` is committed.** GitHub runs the bundled file directly. After changing `review-action/src`, run `npm run build -w review-action` and commit `dist/` in the same commit. CI fails if `dist/` is stale.
 - **`agent/`** must stay within the repo it is pointed at: it works on a fresh branch, never pushes to `main`, and is bounded by turn and budget limits.
 - **`demo-app/`** is the agent's target. Keep it small and idiomatic so agent PRs stay easy to review.
-- **`specs/`** follow the template in `specs/README.md`: goal, requirements, acceptance criteria, out of scope.
+- **`specs/`** follow the template in `specs/README.md`: goal, requirements, acceptance criteria, out of scope. Each acceptance criterion has a unique ID (`- AC1: ...`), and tests that cover it start with that ID. Write new specs with the `/write-spec` skill (`.claude/skills/write-spec/`).
 
 ## Security
 
