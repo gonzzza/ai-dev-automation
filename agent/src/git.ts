@@ -3,6 +3,7 @@ import { mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { run, type Exec } from "./exec.js";
+import { CYCLE_TRAILER, FINDINGS_TRAILER, type PullRequestInfo } from "./fix.js";
 
 /**
  * Parses `git status --porcelain=v1 -z`: NUL-separated "XY path" entries, no quoting.
@@ -134,6 +135,25 @@ export class Git {
     return withTempFile(body, (path) =>
       run(this.exec, "gh", ["pr", "create", "--base", base, "--head", head, "--title", title, "--body-file", path], this.cwd),
     );
+  }
+
+  headSha() {
+    return this.git("rev-parse", "HEAD");
+  }
+
+  /** The trailers the fix cycle writes, one NUL-led record per commit in `range`. */
+  cycleTrailers(range: string) {
+    return this.git("log", `--format=%x00%(trailers:key=${CYCLE_TRAILER},key=${FINDINGS_TRAILER},unfold)`, range);
+  }
+
+  async pullRequest(number: number): Promise<PullRequestInfo> {
+    const json = await run(this.exec, "gh", ["pr", "view", String(number), "--json", "state,isCrossRepository,headRefName,headRefOid,baseRefName"], this.cwd);
+    return JSON.parse(json) as PullRequestInfo;
+  }
+
+  /** Posts a PR comment and returns its URL. */
+  commentOnPullRequest(number: number, body: string): Promise<string> {
+    return withTempFile(body, (path) => run(this.exec, "gh", ["pr", "comment", String(number), "--body-file", path], this.cwd));
   }
 
   /** "https://github.com/owner/repo", for links in the PR body. */

@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { exec } from "../src/exec.js";
+import { fixCommitMessage, parseCycleHistory } from "../src/fix.js";
 import { Git } from "../src/git.js";
 
 // Runs real git in a throwaway repo: offline, and it checks the git plumbing the fakes stand in for.
@@ -70,6 +71,18 @@ describe("Git, against a real repo", () => {
     const before = await git.fingerprint();
     writeFileSync(join(dir, ".git", "config.worktree"), "[core\n"); // not valid config syntax
     expect(await git.fingerprint()).not.toBe(before);
+  });
+
+  it("reads back the fix cycle trailers from real commits", async () => {
+    const git = new Git(exec, dir);
+    sh("branch", "base");
+    sh("commit", "-q", "--allow-empty", "-m", fixCommitMessage(1, 2, { outcomes: [], summary: "First fix.", testing: "", checksPassed: true }));
+    sh("commit", "-q", "--allow-empty", "-m", "Merge main into agent/x"); // a human's commit, no trailers
+    sh("commit", "-q", "--allow-empty", "-m", fixCommitMessage(2, 1, { outcomes: [], summary: "Second fix.", testing: "", checksPassed: true }));
+    expect(parseCycleHistory(await git.cycleTrailers("base..HEAD"))).toEqual([
+      { cycle: 1, findings: 2 },
+      { cycle: 2, findings: 1 },
+    ]);
   });
 
   it("covers the shared config from a linked worktree", async () => {

@@ -77055,6 +77055,26 @@ async function reviewDiff(client, pr, files, { model, effort }) {
 }
 
 // src/run.ts
+var FINDINGS_JSON_MAX_BYTES = 64e3;
+var FINDING_BODY_MAX_CHARS = 4e3;
+var clip = (text, max) => text.length > max ? `${text.slice(0, max)}\u2026` : text;
+function findingsJson(findings) {
+  const kept = [];
+  let size = 2;
+  for (const finding of [...findings].sort(bySeverityDesc)) {
+    const entry = {
+      ...finding,
+      path: clip(finding.path, 500),
+      title: clip(finding.title, 300),
+      body: clip(finding.body, FINDING_BODY_MAX_CHARS)
+    };
+    const entrySize = Buffer.byteLength(JSON.stringify(entry)) + 1;
+    if (size + entrySize > FINDINGS_JSON_MAX_BYTES) break;
+    kept.push(entry);
+    size += entrySize;
+  }
+  return JSON.stringify(kept);
+}
 var errorMessage = (error63) => error63 instanceof Error ? error63.message : String(error63);
 async function run({ io, repo: { owner, repo }, pullRequest: pr, createOctokit, createAnthropic }) {
   const apiKey = io.getInput("anthropic-api-key");
@@ -77082,6 +77102,7 @@ async function run({ io, repo: { owner, repo }, pullRequest: pr, createOctokit, 
     io.info("Nothing to review.");
     io.setOutput("findings", "0");
     io.setOutput("highest-severity", "none");
+    io.setOutput("findings-json", "[]");
     return;
   }
   const result = await reviewDiff(
@@ -77104,6 +77125,7 @@ async function run({ io, repo: { owner, repo }, pullRequest: pr, createOctokit, 
   }
   io.setOutput("findings", String(findings.length));
   io.setOutput("highest-severity", [...findings].sort(bySeverityDesc)[0]?.severity ?? "none");
+  io.setOutput("findings-json", findingsJson(findings));
   if (shouldFail(findings, failOn)) {
     io.setFailed(`Found issues at or above severity "${failOn}".`);
   }

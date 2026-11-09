@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { run, type ActionIO, type RunDeps } from "../src/run.js";
+import { FINDING_BODY_MAX_CHARS, FINDINGS_JSON_MAX_BYTES, findingsJson, run, type ActionIO, type RunDeps } from "../src/run.js";
 import type { Finding } from "../src/schema.js";
 
 const PATCH = "@@ -0,0 +1,2 @@\n+const a = 1;\n+const b = a;";
@@ -90,7 +90,11 @@ describe("run", () => {
     const review = pulls.createReview.mock.calls[0]![0];
     expect(review).toMatchObject({ pull_number: 7, commit_id: "abc", event: "COMMENT" });
     expect(review.comments.map((c: { line: number }) => c.line)).toEqual([2, 1]);
-    expect(outputs).toEqual({ findings: "2", "highest-severity": "high" });
+    expect(outputs).toMatchObject({ findings: "2", "highest-severity": "high" });
+    // Most severe first, with everything a downstream fixer needs to locate and understand each one.
+    const json = JSON.parse(outputs["findings-json"]!) as { severity: string; line: number; path: string; body: string }[];
+    expect(json.map((f) => [f.severity, f.line])).toEqual([["high", 2], ["low", 1]]);
+    expect(json[0]).toMatchObject({ path: expect.any(String), body: expect.any(String) });
     expect(io.setFailed).not.toHaveBeenCalled();
   });
 
@@ -116,7 +120,7 @@ describe("run", () => {
     await run(deps);
     expect(stream).not.toHaveBeenCalled();
     expect(pulls.createReview).not.toHaveBeenCalled();
-    expect(outputs).toEqual({ findings: "0", "highest-severity": "none" });
+    expect(outputs).toEqual({ findings: "0", "highest-severity": "none", "findings-json": "[]" });
   });
 
   it("reports files beyond what GitHub's files API lists", async () => {
@@ -138,5 +142,33 @@ describe("run", () => {
     expect(io.warning).toHaveBeenCalledWith(expect.stringContaining("GraphQL down"));
     expect(io.setFailed).not.toHaveBeenCalled();
     expect(outputs.findings).toBe("1");
+  });
+});
+
+describe("findingsJson", () => {
+  it("truncates long bodies and drops the least severe findings past the size cap", () => {
+    const big = "é".repeat(FINDING_BODY_MAX_CHARS + 500); // 2 bytes each in UTF-8
+    const findings = [
+      ...Array.from({ length: 30 }, (_, i) => finding({ severity: "low", line: i, body: big })),
+      finding({ severity: "critical", title: "Keep me", body: big }),
+    ];
+    const json = findingsJson(findings);
+    const parsed = JSON.parse(json) as Finding[];
+
+    expect(Buffer.byteLength(json)).toBeLessThanOrEqual(FINDINGS_JSON_MAX_BYTES);
+    expect(parsed[0]).toMatchObject({ severity: "critical", title: "Keep me" });
+    expect(parsed[0]!.body).toHaveLength(FINDING_BODY_MAX_CHARS + 1); // + the ellipsis
+    expect(parsed.length).toBeLessThan(findings.length);
+  });
+
+  it("always keeps the most severe finding, however long its fields", () => {
+    const parsed = JSON.parse(findingsJson([finding({ title: "t".repeat(100_000), path: "p".repeat(100_000) })])) as Finding[];
+    expect(parsed).toHaveLength(1);
+    expect(parsed[0]!.title).toHaveLength(301);
+  });
+
+  it("keeps small reviews whole", () => {
+    expect(JSON.parse(findingsJson([finding()]))).toEqual([finding()]);
+    expect(findingsJson([])).toBe("[]");
   });
 });
