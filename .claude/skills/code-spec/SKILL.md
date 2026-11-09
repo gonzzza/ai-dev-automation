@@ -38,9 +38,9 @@ These checks only read state. Run them all, then report every problem together, 
 
 | Check | How | Typical fix |
 |-------|-----|-------------|
-| On the base branch (default `main`) | `git branch --show-current` | Commit or stash the current work, then `git switch main && git pull` |
+| On the base branch (`<base>`, default `main`) | `git branch --show-current` | Commit or stash the current work, then `git switch <base> && git pull` |
 | Clean tree | `git status --porcelain` | Commit or stash. Untracked files count as changes. |
-| Spec committed on the base | `git fetch origin` then `git cat-file -e origin/main:specs/<file>` | Merge the spec's PR first. A spec that exists only on a branch is lost when you switch to `main`. |
+| Spec committed on the base | `git fetch origin` then `git cat-file -e origin/<base>:specs/<file>` | Merge the spec's PR first. A spec that exists only on a branch is lost when you switch to `<base>`. |
 | Branch names are free | `git branch --list` and `git ls-remote --heads origin` for both `agent/<name>` and `spec/<name>` | Delete the branch, but only after the next check |
 | No PR for those branches | `gh pr list --head <branch> --state all` | If a PR exists (open or merged), ask first. It may be the live example the README links to. To rerun: copy the spec under a new number, or close the PR (with a comment saying it is superseded) and then rename or delete its branch. **Renaming a PR's head branch closes the PR**, and it can't be reopened until the name is restored, so never rename to "keep the PR open". |
 | `gh` signed in | `gh auth status` | `gh auth login` (the user runs it) |
@@ -62,15 +62,17 @@ If the user already said who codes it ("do it yourself", "with the agent"), don'
 Settle these yourself and state them:
 
 - **Scope.** The default is `demo-app`. If the spec changes other workspaces (for example `agent/`, `standards/`, `review-action/`), include each one and point it out. The scope limits what may change in both modes.
-- **Agent mode:** `--sandbox docker` if `docker info` succeeded, otherwise `--sandbox none`. Keep the default limits (`--max-turns 60`, `--max-budget 5`, `--effort high`) unless the spec is large or a previous run hit a limit. With standards: `--standards org-standards --standards-ref <short SHA of the base>`.
+- **Agent mode:** pass the scope as one `--scope <dir>` per directory. Leave it out only when the scope is exactly `demo-app`, the agent's default. A scope you state but don't pass makes the agent run with its default, and the run then fails the scope gate after spending money. If the base isn't `main`, pass `--base <base>`. Use `--sandbox docker` if `docker info` succeeded, otherwise `--sandbox none`. Keep the default limits (`--max-turns 60`, `--max-budget 5`, `--effort high`) unless the spec is large or a previous run hit a limit. With standards: `--standards org-standards --standards-ref <short SHA of the base>`.
 
 ## 4a. Agent mode: run it
 
 Show the exact command and wait for a clear yes. A run spends API money, and a real run pushes a branch and opens a PR.
 
 ```sh
-npm run agent -- specs/<file>.md [options]
+npm run agent -- specs/<file>.md [--scope <dir> ...] [--base <base>] [options]
 ```
+
+Before showing it, check the command against step 3: every directory in the scope has a `--scope`, unless the scope is only `demo-app`.
 
 A run takes several minutes, so start it with `run_in_background` and wait for the completion notification. Don't poll it. While it runs, **don't touch the working tree**: no edits, no branch switches, no git commands that write. The harness compares git state before and after, so any change can fail the run or end up in the PR.
 
