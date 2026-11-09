@@ -77117,7 +77117,7 @@ function renderFindingListItem(f) {
   return `- \`${f.path}:${f.line}\` ${renderFinding(f).replace(/\s*\n+\s*/g, " ")}`;
 }
 function renderStandardsLine({ checked, dropped, ref }) {
-  const parts = [checked.length ? `checked ${checked.join(", ")}` : "none applied to the reviewed files"];
+  const parts = [checked.length ? `checked ${checked.join(", ")}` : dropped.length ? "none checked" : "none applied to the reviewed files"];
   if (ref) parts.push(`at \`${ref.replace(/`/g, "")}\``);
   let line = `**Standards:** ${parts.join(" ")}`;
   if (dropped.length) line += ` \xB7 not checked (over \`max-standards-chars\`): ${dropped.join(", ")}`;

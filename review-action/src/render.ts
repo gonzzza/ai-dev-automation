@@ -81,7 +81,8 @@ export interface StandardsSummary {
 
 /** The summary's "Standards" line: what was checked, at which version, and what wasn't. */
 export function renderStandardsLine({ checked, dropped, ref }: StandardsSummary): string {
-  const parts = [checked.length ? `checked ${checked.join(", ")}` : "none applied to the reviewed files"];
+  // With nothing checked, "none applied" is only true if nothing was dropped for budget either.
+  const parts = [checked.length ? `checked ${checked.join(", ")}` : dropped.length ? "none checked" : "none applied to the reviewed files"];
   if (ref) parts.push(`at \`${ref.replace(/`/g, "")}\``);
   let line = `**Standards:** ${parts.join(" ")}`;
   if (dropped.length) line += ` · not checked (over \`max-standards-chars\`): ${dropped.join(", ")}`;

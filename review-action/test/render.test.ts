@@ -64,6 +64,12 @@ describe("renderStandardsLine", () => {
     expect(renderStandardsLine({ checked: ["TS-002"], dropped: [] })).toBe("**Standards:** checked TS-002");
     expect(renderStandardsLine({ checked: [], dropped: [], ref: "a`b" })).toBe("**Standards:** none applied to the reviewed files at `ab`");
   });
+
+  it("AC7: says none were checked, not that none applied, when every applicable standard was dropped", () => {
+    expect(renderStandardsLine({ checked: [], dropped: ["TS-001", "TS-002"], ref: "v3" })).toBe(
+      "**Standards:** none checked at `v3` · not checked (over `max-standards-chars`): TS-001, TS-002",
+    );
+  });
 });
 
 describe("fitBody", () => {
