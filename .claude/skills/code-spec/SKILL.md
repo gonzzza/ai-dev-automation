@@ -82,7 +82,7 @@ Then go to step 5.
 
 You do the agent's job and the harness's job, under the same rules.
 
-**Branch.** `git switch -c spec/<name>` from the up-to-date base.
+**Snapshot, then branch.** Before creating the branch, save the git state that gate 2 compares against to files in your scratchpad (or another temp directory outside the repo): the output of `ls -la .git/hooks` and of `git config --local --list`. Then `git switch -c spec/<name>` from the up-to-date base.
 
 **Brief.** Follow [`agent/prompt.md`](../../../agent/prompt.md) as your brief, with the scope from step 3 as the writable directories:
 
@@ -102,7 +102,7 @@ You do the agent's job and the harness's job, under the same rules.
 **Gates.** When `npm run check` passes, check each of these yourself. If one fails, fix it, or stop and tell the user:
 
 1. **Scope.** Every path in `git status --porcelain` is inside the scope, and none is protected config.
-2. **Git state.** No commits were made and no hooks or git config changed during the work: `git log <base>..HEAD` is empty, and `.git/hooks` and `git config --local --list` look the same as before.
+2. **Git state.** No commits were made and no hooks or git config changed during the work: `git log <base>..HEAD` is empty, and running `ls -la .git/hooks` and `git config --local --list` again gives exactly what you saved in the snapshot (compare with `diff`). If there is no snapshot, say so: this gate can't pass without one.
 3. **Secrets.** Search the diff, including new files, and the PR body you are about to write, for credential formats: `sk-ant-`, `ghp_`/`gho_`/`ghu_`/`ghs_`/`ghr_`, `github_pat_`, `AKIA` followed by 16 characters, `-----BEGIN ... PRIVATE KEY-----`, and URLs with a password (`scheme://user:pass@`). There should be no hits.
 
 **Confirm, then publish.** Show the user the summary, the plan, the files changed (`git diff --stat`) and any notes, and offer to show the full diff. Commit, push and open the PR only after a clear yes:
