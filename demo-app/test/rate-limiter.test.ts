@@ -81,6 +81,71 @@ describe("createRateLimiter", () => {
     expect(limiter.available()).toBeCloseTo(0);
   });
 
+  it("acquire sleeps again when another caller takes the tokens during its sleep", async () => {
+    let time = 1_000;
+    const sleeps: number[] = [];
+    const seen: number[] = [];
+    const limiter = createRateLimiter({
+      capacity: 2,
+      refillPerSecond: 1,
+      now: () => time,
+      sleep: async (ms) => {
+        sleeps.push(ms);
+        time += ms;
+        // A competing caller grabs the refilled token before acquire re-checks.
+        if (sleeps.length === 1) expect(limiter.tryRemove()).toBe(true);
+        seen.push(limiter.available());
+      },
+    });
+    limiter.tryRemove(2);
+    await limiter.acquire();
+    expect(sleeps).toHaveLength(2);
+    expect(sleeps[0]).toBeCloseTo(1_000);
+    expect(sleeps[1]).toBeCloseTo(1_000);
+    expect(limiter.available()).toBeCloseTo(0);
+    expect(Math.min(...seen)).toBeGreaterThanOrEqual(0);
+  });
+
+  it("concurrent acquires on a bucket with room for one never go negative", async () => {
+    let time = 1_000;
+    const sleeps: number[] = [];
+    const seen: number[] = [];
+    const limiter = createRateLimiter({
+      capacity: 1,
+      refillPerSecond: 1,
+      now: () => time,
+      // Like a real timer: wake at an absolute deadline, yielding to other callers first.
+      sleep: async (ms) => {
+        const wake = time + ms;
+        sleeps.push(ms);
+        await Promise.resolve();
+        time = Math.max(time, wake);
+        seen.push(limiter.available());
+      },
+    });
+    limiter.tryRemove();
+    await Promise.all([limiter.acquire(), limiter.acquire()]);
+    // Both wait 1s; one wins the token, the other must sleep a second time.
+    expect(sleeps).toHaveLength(3);
+    for (const ms of sleeps) expect(ms).toBeCloseTo(1_000);
+    expect(time).toBe(3_000);
+    expect(limiter.available()).toBeCloseTo(0);
+    expect(Math.min(...seen)).toBeGreaterThanOrEqual(0);
+  });
+
+  it("ignores a clock that goes backwards", () => {
+    const { limiter, advance } = setup({ capacity: 10, refillPerSecond: 2 });
+    limiter.tryRemove(10);
+    advance(-500);
+    expect(limiter.available()).toBe(0);
+    expect(limiter.waitTime()).toBeCloseTo(500);
+    // Time lost going backwards is not credited when the clock catches up.
+    advance(500);
+    expect(limiter.available()).toBe(0);
+    advance(500);
+    expect(limiter.available()).toBeCloseTo(1);
+  });
+
   it("acquire does not sleep when tokens are available", async () => {
     const { limiter, sleeps } = setup({ capacity: 2, refillPerSecond: 1 });
     await limiter.acquire(2);
