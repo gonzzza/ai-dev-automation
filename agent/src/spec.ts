@@ -1,5 +1,11 @@
 import { posix } from "node:path";
 
+/** One acceptance criterion. The ID lets tests and reviews point back at it, e.g. it("AC3: ..."). */
+export interface Criterion {
+  id: string;
+  text: string;
+}
+
 export interface Spec {
   /** Repo-relative path, used in links and the PR body. */
   path: string;
@@ -7,10 +13,15 @@ export interface Spec {
   slug: string;
   title: string;
   body: string;
+  criteria: Criterion[];
 }
 
 /** Sections every spec must have, so the agent always gets a goal and a definition of done. */
 export const REQUIRED_SECTIONS = ["Goal", "Requirements", "Acceptance criteria"];
+
+/** A top-level bullet: "- text" or "* text" with no indentation. Indented lines continue the bullet above. */
+const TOP_LEVEL_BULLET = /^[-*]\s+(.*)$/;
+const CRITERION = /^(AC[1-9]\d*):\s*(\S.*)$/;
 
 export function parseSpec(rawPath: string, body: string): Spec {
   // Normalize first: on Linux, basename() does not split on backslashes.
@@ -27,5 +38,58 @@ export function parseSpec(rawPath: string, body: string): Spec {
     throw new Error(`${path}: file name must be lowercase kebab-case, e.g. 002-add-cache.md`);
   }
 
-  return { path, slug, title, body };
+  return { path, slug, title, body, criteria: parseCriteria(path, section(body, "Acceptance criteria")) };
+}
+
+/** The lines under a "## name" heading, up to the next "## " heading. */
+function section(body: string, name: string): string[] {
+  const lines = body.split(/\r?\n/);
+  const start = lines.findIndex((l) => /^##\s+/.test(l) && l.replace(/^##\s+/, "").trim().toLowerCase() === name.toLowerCase());
+  const rest = lines.slice(start + 1);
+  const end = rest.findIndex((l) => /^##?\s+/.test(l));
+  return end === -1 ? rest : rest.slice(0, end);
+}
+
+/**
+ * Every top-level bullet is one criterion and must start with a unique ID: "- AC1: ...".
+ * Prose between bullets is allowed; a criterion without an ID is not, since nothing could reference it.
+ */
+function parseCriteria(path: string, lines: string[]): Criterion[] {
+  const criteria: Criterion[] = [];
+  for (const line of lines) {
+    const bullet = TOP_LEVEL_BULLET.exec(line);
+    if (!bullet) continue;
+    const match = CRITERION.exec(bullet[1]!.trim());
+    if (!match) throw new Error(`${path}: acceptance criterion needs an ID, e.g. "- AC${criteria.length + 1}: ...": ${line.trim()}`);
+    const [, id, text] = match;
+    if (criteria.some((c) => c.id === id)) throw new Error(`${path}: duplicate acceptance criterion ID ${id}`);
+    criteria.push({ id: id!, text: text!.trim() });
+  }
+  if (!criteria.length) throw new Error(`${path}: acceptance criteria must list at least one "- AC1: ..." bullet`);
+  return criteria;
+}
+
+/**
+ * Validates every spec in a folder at once: each must parse, and no two may share a number prefix,
+ * since the number orders the specs and keeps branch names unique.
+ */
+export function checkSpecs(files: { path: string; body: string }[]): string[] {
+  const errors: string[] = [];
+  const byNumber = new Map<string, string>();
+  for (const file of files) {
+    try {
+      const { slug, path } = parseSpec(file.path, file.body);
+      const number = /^(\d+)-/.exec(slug)?.[1];
+      if (!number) {
+        errors.push(`${path}: file name must start with a number, e.g. 002-add-cache.md`);
+        continue;
+      }
+      const other = byNumber.get(number);
+      if (other) errors.push(`${path}: number ${number} is already used by ${other}`);
+      else byNumber.set(number, path);
+    } catch (error) {
+      errors.push(error instanceof Error ? error.message : String(error));
+    }
+  }
+  return errors;
 }

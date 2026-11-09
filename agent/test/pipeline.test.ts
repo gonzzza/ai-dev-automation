@@ -6,7 +6,7 @@ import { parseSpec } from "../src/spec.js";
 
 const spec = parseSpec(
   "specs/001-rate-limiter.md",
-  "# Add a token bucket rate limiter\n\n## Goal\nx\n\n## Requirements\nx\n\n## Acceptance criteria\nx\n",
+  "# Add a token bucket rate limiter\n\n## Goal\nx\n\n## Requirements\nx\n\n## Acceptance criteria\n- AC1: x\n",
 );
 
 const agentRun: AgentRun = {
