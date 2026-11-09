@@ -57,6 +57,31 @@ describe("parseSpec", () => {
       expect(parseSpec("specs/a.md", body).criteria.map((c) => c.id)).toEqual(["AC1", "AC2"]);
     });
 
+    it("finds the real section after an example spec in a code block", () => {
+      const example = "```markdown\n## Acceptance criteria\n- AC1: from the example\n```\n";
+      const body = VALID.replace("- Token bucket.\n", `- Token bucket.\n${example}`);
+      expect(parseSpec("specs/a.md", body).criteria).toEqual([
+        { id: "AC1", text: "A new limiter is full." },
+        { id: "AC2", text: "Refill is continuous, including fractional tokens." },
+      ]);
+    });
+
+    it("doesn't count headings in code blocks as the spec's own sections", () => {
+      const body = VALID.replace("## Acceptance criteria\n", "```\n## Acceptance criteria\n```\n");
+      expect(() => parseSpec("specs/a.md", body)).toThrow(/missing section\(s\): Acceptance criteria/);
+    });
+
+    it("closes a code block only on a matching fence", () => {
+      // A ``` line inside a ~~~ block is content; the block ends at ~~~, so AC2 is still found.
+      const body = VALID.replace("- AC2", "~~~\n```\n## Out of scope\n~~~\n- AC2");
+      expect(parseSpec("specs/a.md", body).criteria.map((c) => c.id)).toEqual(["AC1", "AC2"]);
+    });
+
+    it("treats an unclosed code block as running to the end of the file", () => {
+      const body = VALID.replace("- AC2", "```\n- AC2");
+      expect(parseSpec("specs/a.md", body).criteria.map((c) => c.id)).toEqual(["AC1"]);
+    });
+
     it("ignores bullets inside fenced code blocks", () => {
       const body = VALID.replace("- AC2", "```ts\n- not a criterion\n```\n- AC2");
       expect(parseSpec("specs/a.md", body).criteria).toEqual([

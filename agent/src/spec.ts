@@ -26,10 +26,14 @@ const CRITERION = /^(AC[1-9]\d*):\s*(\S.*)$/;
 export function parseSpec(rawPath: string, body: string): Spec {
   // Normalize first: on Linux, basename() does not split on backslashes.
   const path = rawPath.replace(/\\/g, "/");
-  const title = /^#\s+(.+)$/m.exec(body)?.[1]?.trim();
+  // Headings, sections and criteria are all read from the text outside code blocks, so an example
+  // spec or a "# comment" in a snippet can't be mistaken for the real structure.
+  const lines = blankCodeBlocks(body.split(/\r?\n/));
+  const text = lines.join("\n");
+  const title = /^#\s+(.+)$/m.exec(text)?.[1]?.trim();
   if (!title) throw new Error(`${path}: spec must start with a "# Title" heading`);
 
-  const headings = [...body.matchAll(/^##\s+(.+)$/gm)].map((m) => m[1]!.trim().toLowerCase());
+  const headings = [...text.matchAll(/^##\s+(.+)$/gm)].map((m) => m[1]!.trim().toLowerCase());
   const missing = REQUIRED_SECTIONS.filter((s) => !headings.includes(s.toLowerCase()));
   if (missing.length) throw new Error(`${path}: spec is missing section(s): ${missing.join(", ")}`);
 
@@ -38,46 +42,50 @@ export function parseSpec(rawPath: string, body: string): Spec {
     throw new Error(`${path}: file name must be lowercase kebab-case, e.g. 002-add-cache.md`);
   }
 
-  return { path, slug, title, body, criteria: parseCriteria(path, section(body, "Acceptance criteria")) };
+  return { path, slug, title, body, criteria: parseCriteria(path, section(lines, "Acceptance criteria")) };
 }
 
-const FENCE = /^\s*(```|~~~)/;
+/** Opening or closing line of a fenced code block: three or more backticks or tildes. */
+const FENCE = /^ {0,3}(`{3,}|~{3,})/;
 
 /**
- * The lines under a "## name" heading, up to the next "# " or "## " heading. Lines inside fenced
- * code blocks are never headings, so a "# comment" in a shell snippet doesn't end the section.
+ * Replaces every line of a fenced code block, fences included, with a blank line, keeping line
+ * positions. A block closes only on a bare fence of the same character at least as long as the
+ * opener, and an unclosed block runs to the end of the file, as in CommonMark.
  */
-function section(body: string, name: string): string[] {
-  const lines = body.split(/\r?\n/);
+function blankCodeBlocks(lines: string[]): string[] {
+  let opener: string | undefined;
+  return lines.map((line) => {
+    const fence = FENCE.exec(line)?.[1];
+    if (opener === undefined) {
+      if (!fence) return line;
+      opener = fence;
+      return "";
+    }
+    if (fence && fence[0] === opener[0] && fence.length >= opener.length && line.trim() === fence) opener = undefined;
+    return "";
+  });
+}
+
+/** The lines under a "## name" heading, up to the next "# " or "## " heading. Expects code blocks blanked. */
+function section(lines: string[], name: string): string[] {
   const start = lines.findIndex((l) => /^##\s+/.test(l) && l.replace(/^##\s+/, "").trim().toLowerCase() === name.toLowerCase());
   const rest = lines.slice(start + 1);
-  let inFence = false;
-  const end = rest.findIndex((l) => {
-    if (FENCE.test(l)) inFence = !inFence;
-    return !inFence && /^##?\s+/.test(l);
-  });
+  const end = rest.findIndex((l) => /^##?\s+/.test(l));
   return end === -1 ? rest : rest.slice(0, end);
 }
 
 /**
  * Every top-level bullet is one criterion and must start with a unique ID: "- AC1: ...".
  * Indented lines right below a bullet continue it and are joined into its text. Prose between
- * bullets and fenced code blocks are allowed and ignored; a criterion without an ID is not,
- * since nothing could reference it.
+ * bullets is allowed and ignored (code blocks arrive as blank lines); a criterion without an ID
+ * is not, since nothing could reference it.
  */
 function parseCriteria(path: string, lines: string[]): Criterion[] {
   const criteria: Criterion[] = [];
-  // The criterion still collecting continuation lines; a blank line, prose or a fence ends it.
+  // The criterion still collecting continuation lines; a blank line or prose ends it.
   let open: Criterion | undefined;
-  let inFence = false;
   for (const line of lines) {
-    if (FENCE.test(line)) {
-      inFence = !inFence;
-      open = undefined;
-      continue;
-    }
-    if (inFence) continue;
-
     const bullet = TOP_LEVEL_BULLET.exec(line);
     if (!bullet) {
       if (open && /^\s+\S/.test(line)) open.text += ` ${line.trim()}`;
