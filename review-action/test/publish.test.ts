@@ -59,10 +59,13 @@ describe("publishReview", () => {
 describe("inlineCommentIds", () => {
   const comment = (over: Partial<{ path: string; line: number; body: string }> = {}) => ({ path: "src/a.ts", line: 3, side: "RIGHT" as const, body: "b", ...over });
 
-  function fakeClient(posted: { id: number; path: string; line: number | null; original_line?: number; body: string }[]) {
-    const listCommentsForReview = vi.fn();
-    const paginate = vi.fn().mockResolvedValue(posted);
-    return { client: { rest: { pulls: { listCommentsForReview } }, paginate } as unknown as Pick<Octokit, "rest" | "paginate">, paginate };
+  type Posted = { id: number; path: string; line: number | null; original_line?: number; body: string; pull_request_review_id?: number };
+
+  /** The PR's review comments, shaped as listReviewComments returns them; review 11 unless stated. */
+  function fakeClient(posted: Posted[]) {
+    const pulls = { listReviewComments: vi.fn(), listCommentsForReview: vi.fn() };
+    const paginate = vi.fn().mockResolvedValue(posted.map((p) => ({ pull_request_review_id: 11, ...p })));
+    return { client: { rest: { pulls }, paginate } as unknown as Pick<Octokit, "rest" | "paginate">, paginate, pulls };
   }
 
   it("matches posted comments to the inline list by path, line and body", async () => {
@@ -72,7 +75,24 @@ describe("inlineCommentIds", () => {
     ]);
     const ids = await inlineCommentIds(client, target, 11, [comment(), comment({ path: "src/b.ts", line: 9, body: "other" }), comment({ line: 4 })]);
     expect(ids).toEqual([1, 2, undefined]);
-    expect(paginate.mock.calls[0]![1]).toMatchObject({ pull_number: 7, review_id: 11 });
+    expect(paginate.mock.calls[0]![1]).toMatchObject({ owner: "o", repo: "r", pull_number: 7 });
+  });
+
+  // Regression: listCommentsForReview returns the legacy comment shape, with no `line` or
+  // `original_line`, so matching on its output never found a comment and no thread got a reply.
+  it("reads the comments with listReviewComments, which returns their lines", async () => {
+    const { client, paginate, pulls } = fakeClient([{ id: 1, path: "src/a.ts", line: 3, body: "b" }]);
+    await inlineCommentIds(client, target, 11, [comment()]);
+    expect(paginate).toHaveBeenCalledWith(pulls.listReviewComments, expect.anything());
+    expect(paginate).not.toHaveBeenCalledWith(pulls.listCommentsForReview, expect.anything());
+  });
+
+  it("ignores comments from other reviews and replies on the PR", async () => {
+    const { client } = fakeClient([
+      { id: 3, path: "src/a.ts", line: 3, body: "b", pull_request_review_id: 10 }, // an earlier AI review
+      { id: 4, path: "src/a.ts", line: 3, body: "b" },
+    ]);
+    expect(await inlineCommentIds(client, target, 11, [comment()])).toEqual([4]);
   });
 
   it("gives identical comments distinct ids, in order", async () => {

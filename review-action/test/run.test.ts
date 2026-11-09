@@ -36,6 +36,8 @@ const DEFAULT_INPUTS: Record<string, string> = {
   "max-standards-chars": "40000",
 };
 
+type PostedComment = { id: number; pull_request_review_id: number; path: string; line: number; body: string };
+
 /** Builds fake @actions/core, Octokit and Anthropic clients and records what the action does with them. */
 function setup({
   inputs = {},
@@ -43,12 +45,15 @@ function setup({
   findings = [finding()],
   supersedeError,
   commentIdsError,
+  readBack = (comments) => comments,
 }: {
   inputs?: Record<string, string>;
   files?: unknown[];
   findings?: Finding[];
   supersedeError?: Error;
   commentIdsError?: Error;
+  /** Edits the inline comments the action reads back after posting, e.g. to lose one. */
+  readBack?: (comments: PostedComment[]) => PostedComment[];
 } = {}) {
   const all = { ...DEFAULT_INPUTS, ...inputs };
   const outputs: Record<string, string> = {};
@@ -65,17 +70,21 @@ function setup({
   const pulls = {
     listFiles: vi.fn(),
     listReviews: vi.fn(),
-    listCommentsForReview: vi.fn(),
+    listReviewComments: vi.fn(),
     createReview: vi.fn().mockResolvedValue({ data: { id: 99, user: { login: "github-actions[bot]" } } }),
     updateReview: vi.fn(),
   };
   const paginate = vi.fn(async (method: unknown) => {
     if (method === pulls.listFiles) return files;
-    // The inline comments as GitHub returns them after createReview: ids 1000, 1001…
-    if (method === pulls.listCommentsForReview) {
+    // The PR's review comments as GitHub returns them after createReview: the new review's are ids 1000, 1001…
+    if (method === pulls.listReviewComments) {
       if (commentIdsError) throw commentIdsError;
       const review = pulls.createReview.mock.calls.at(-1)?.[0] as { comments?: { path: string; line: number; body: string }[] } | undefined;
-      return (review?.comments ?? []).map((c, i) => ({ id: 1000 + i, path: c.path, line: c.line, body: c.body }));
+      const { data } = (await pulls.createReview.mock.results.at(-1)?.value) as { data: { id: number } };
+      const reviewId = data.id;
+      return readBack(
+        (review?.comments ?? []).map((c, i) => ({ id: 1000 + i, pull_request_review_id: reviewId, path: c.path, line: c.line, body: c.body })),
+      );
     }
     if (supersedeError) throw supersedeError;
     return [];
@@ -259,6 +268,22 @@ describe("run", () => {
       .mockResolvedValue({ data: { id: 100, user: null } });
     await run(deps);
     expect(JSON.parse(outputs["findings-json"]!)).toEqual([finding()]);
+  });
+
+  it("warns when some inline comments can't be matched to their ids", async () => {
+    const { deps, io, outputs } = setup({
+      findings: [finding({ line: 1 }), finding({ line: 2 })],
+      readBack: (comments) => comments.slice(1),
+    });
+    await run(deps);
+    expect(io.warning).toHaveBeenCalledWith(expect.stringContaining("Matched 1 of 2 inline comments"));
+    expect((JSON.parse(outputs["findings-json"]!) as { commentId?: number }[]).filter((f) => f.commentId)).toHaveLength(1);
+  });
+
+  it("doesn't warn when every inline comment is matched", async () => {
+    const { deps, io } = setup();
+    await run(deps);
+    expect(io.warning).not.toHaveBeenCalled();
   });
 
   it("warns and still sets outputs when the comment ids can't be read", async () => {
