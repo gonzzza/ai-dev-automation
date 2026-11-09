@@ -195,12 +195,18 @@ describe("runFixCycle", () => {
     [{ pr: { headRefName: "feature/x" }, branch: "feature/x" }, "not an agent PR"],
     [{ branch: "main" }, "Check out agent/001-rate-limiter first"],
     [{ head: "old999" }, "Pull first"],
-    [{ reviewedSha: "zzz000" }, "has moved"],
   ])("refuses to run when %o", async (options, error) => {
     const { deps, git } = setup(options);
     await expect(runFixCycle(deps)).rejects.toThrow(error);
     expect(deps.runAgent).not.toHaveBeenCalled();
     expect(git.push).not.toHaveBeenCalled();
+  });
+
+  it("skips cleanly, without failing the job, when the branch moved since the review", async () => {
+    const { deps, git } = setup({ reviewedSha: "zzz000" });
+    expect(await runFixCycle(deps)).toEqual({ status: "stale" });
+    expect(deps.runAgent).not.toHaveBeenCalled();
+    expect(git.commentOnPullRequest).not.toHaveBeenCalled();
   });
 
   it("does nothing, and posts nothing, when only low findings remain", async () => {

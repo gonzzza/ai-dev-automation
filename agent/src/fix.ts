@@ -230,6 +230,7 @@ export interface FixDeps extends GateDeps {
 
 export type FixResult =
   | { status: "nothing-to-fix" }
+  | { status: "stale" }
   | { status: "stopped"; reason: string; commentUrl: string }
   | { status: "declined"; commentUrl: string; run: AgentRun<FixReport> }
   | { status: "fixed"; cycle: number; commentUrl: string; run: AgentRun<FixReport> };
@@ -253,8 +254,10 @@ export async function runFixCycle(deps: FixDeps): Promise<FixResult> {
   if (dirty.length) throw new Error(`Working tree is not clean:\n${dirty.map((f) => `  ${f}`).join("\n")}`);
   const head = await git.headSha();
   if (head !== pr.headRefOid) throw new Error(`Local ${branch} is at ${head}, but the PR is at ${pr.headRefOid}. Pull first.`);
+  // Not an error: someone pushed after the review, and the review of that push decides the next cycle.
   if (deps.reviewedSha && deps.reviewedSha !== head) {
-    throw new Error(`The findings are about ${deps.reviewedSha}, but ${branch} has moved to ${head}. The review of the new commit decides the next cycle.`);
+    log(`The findings are about ${deps.reviewedSha}, but ${branch} has moved to ${head}. Skipping; the review of the new commit decides.`);
+    return { status: "stale" };
   }
 
   const history = parseCycleHistory(await git.cycleTrailers(`origin/${pr.baseRefName}..HEAD`));

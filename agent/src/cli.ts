@@ -121,6 +121,9 @@ async function main(): Promise<void> {
       case "nothing-to-fix":
         console.log("\n✅ Nothing to fix.");
         break;
+      case "stale":
+        console.log("\n✅ Skipped: the branch moved since the review. The next review decides.");
+        break;
       case "stopped":
         console.log(`\n✅ Fix cycle stopped: ${result.reason} ${result.commentUrl}`);
         break;
