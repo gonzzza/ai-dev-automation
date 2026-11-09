@@ -59,6 +59,42 @@ export function isWritable(path: string, writableDirs: string[]): boolean {
   return writableDirs.some((dir) => path.startsWith(`${dir.replace(/\/+$/, "")}/`));
 }
 
+/** Concrete names of credential files, to test globs against. Keep in step with isSecretFile. */
+const SECRET_FILE_EXAMPLES = [".env", ".env.local", ".env.production", ".npmrc", "CLAUDE.local.md", "server.pem", "server.key", "cert.p12", "cert.pfx"];
+
+/**
+ * The file-name part of a glob as a regex, with ripgrep's semantics: `*` and `?` match dotfiles too,
+ * `{a,b}` is alternation and `[...]` a class. Conservative: anything unparseable counts as matching.
+ */
+function globSegmentRegExp(segment: string): RegExp | null {
+  let source = "";
+  for (let i = 0; i < segment.length; i++) {
+    const c = segment[i]!;
+    if (c === "*") source += ".*";
+    else if (c === "?") source += ".";
+    else if (c === "{") source += "(?:";
+    else if (c === "}") source += ")";
+    else if (c === ",") source += "|";
+    else if (c === "[") {
+      const end = segment.indexOf("]", i + 1);
+      if (end === -1) return null;
+      source += `[${segment.slice(i + 1, end).replace(/^!/, "^").replace(/\\/g, "\\\\")}]`;
+      i = end;
+    } else source += c.replace(/[.+^$()|\\]/g, "\\$&");
+  }
+  try {
+    return new RegExp(`^${source}$`, "i");
+  } catch {
+    return null;
+  }
+}
+
+/** Whether a file glob could match any credential file name. */
+export function globMatchesSecretFile(glob: string): boolean {
+  const regex = globSegmentRegExp(glob.split(/[\\/]/).pop() ?? "");
+  return regex === null || SECRET_FILE_EXAMPLES.some((name) => regex.test(name));
+}
+
 /** The path a tool call touches, from the inputs of Read/Write/Edit (file_path) and Glob/Grep (path). */
 function targetPath(input: Record<string, unknown>): string | undefined {
   const p = input.file_path ?? input.path;
@@ -91,9 +127,10 @@ export function decide(toolName: string, input: Record<string, unknown>, { repoR
       return deny(`File globs must stay inside the repository: ${glob}`);
     }
     if (isSecretFile(path)) return deny(`${path} may hold credentials and is off limits.`);
-    // "**/.env*" or "*.pem": the glob's file name, wildcards removed, must not name a secret file either.
-    if (typeof glob === "string" && isSecretFile((glob.split(/[\\/]/).pop() ?? "").replace(/[*?[\]{}]/g, ""))) {
-      return deny(`${glob} matches files that may hold credentials, which are off limits.`);
+    // Grep returns contents, and ripgrep's --glob can override ignore rules, so its glob must not be
+    // able to match a credential file. (Glob only lists names, so "demo-app/**/*" stays allowed.)
+    if (toolName === "Grep" && typeof glob === "string" && globMatchesSecretFile(glob)) {
+      return deny(`The glob ${glob} could match files that may hold credentials. Use a narrower glob, such as *.ts.`);
     }
     if (WRITE_TOOLS.has(toolName) && isProtectedConfig(path)) {
       return deny(`${path} configures how the checks run and cannot be changed by the agent. If the spec needs it, say so in your notes.`);

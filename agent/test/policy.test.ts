@@ -102,11 +102,19 @@ describe("createPolicyHook", () => {
 });
 
 describe("secret globs", () => {
-  it("denies Glob patterns and Grep globs that target credential files", () => {
-    expect(allowed("Glob", { pattern: "**/.env*" })).toBe(false);
-    expect(allowed("Grep", { pattern: "KEY", path: ".", glob: "**/.npmrc" })).toBe(false);
-    expect(allowed("Grep", { pattern: "BEGIN", glob: "*.pem" })).toBe(false);
-    expect(allowed("Grep", { pattern: "env", glob: "**/*.ts" })).toBe(true);
+  it("denies Grep globs that could match a credential file, however the wildcards are written", () => {
+    for (const glob of ["**/.npmrc", "*.pem", ".e*", ".e?v", "{.env,x}", "*", "**", ".[e]nv", "CLAUDE.*.md", "*.{ts,key}", "[unclosed"]) {
+      expect(allowed("Grep", { pattern: "KEY", path: ".", glob }), glob).toBe(false);
+    }
+    // "*.md" is denied on purpose: it matches CLAUDE.local.md.
+    for (const glob of ["**/*.ts", "src/*.{ts,tsx}", "README.md", "demo-app/**/*.test.ts"]) {
+      expect(allowed("Grep", { pattern: "env", glob }), glob).toBe(true);
+    }
+  });
+
+  it("lets Glob list any file name, since it returns names, not contents", () => {
+    expect(allowed("Glob", { pattern: "demo-app/**/*" })).toBe(true);
+    expect(allowed("Glob", { pattern: "**/.env*" })).toBe(true);
   });
 });
 
