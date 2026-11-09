@@ -74,14 +74,15 @@ describe("Git, against a real repo", () => {
   });
 
   it("reads back the fix cycle trailers from real commits", async () => {
+    const found = (category: string, line: number) => ({ path: "demo-app/src/a.ts", line, category, severity: "medium" as const, title: "t", body: "b" });
     const git = new Git(exec, dir);
     sh("branch", "base");
-    sh("commit", "-q", "--allow-empty", "-m", fixCommitMessage(1, 2, { outcomes: [], summary: "First fix.", testing: "", checksPassed: true }));
+    sh("commit", "-q", "--allow-empty", "-m", fixCommitMessage(1, [found("bug", 44)], { outcomes: [], summary: "First fix.", testing: "", checksPassed: true }));
     sh("commit", "-q", "--allow-empty", "-m", "Merge main into agent/x"); // a human's commit, no trailers
-    sh("commit", "-q", "--allow-empty", "-m", fixCommitMessage(2, 1, { outcomes: [], summary: "Second fix.", testing: "", checksPassed: true }));
+    sh("commit", "-q", "--allow-empty", "-m", fixCommitMessage(2, [found("missing-tests", 73)], { outcomes: [], summary: "Second fix.", testing: "", checksPassed: true }));
     expect(parseCycleHistory(await git.cycleTrailers("base..HEAD"))).toEqual([
-      { cycle: 1, findings: 2 },
-      { cycle: 2, findings: 1 },
+      { cycle: 1, addressed: [{ category: "bug", line: 44, path: "demo-app/src/a.ts" }] },
+      { cycle: 2, addressed: [{ category: "missing-tests", line: 73, path: "demo-app/src/a.ts" }] },
     ]);
   });
 

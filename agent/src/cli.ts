@@ -112,9 +112,9 @@ async function main(): Promise<void> {
       minSeverity,
       maxCycles: parseLimit("--max-cycles", values["max-cycles"], { integer: true }),
       model: config.model,
-      runAgent: async (findings, branch) =>
+      runAgent: async (findings, deferred, branch) =>
         runAgent(
-          fixTask(template, { branch, findings, writableDirs: config.writableDirs, specBody: await readRepoFile(specPathForBranch(branch)) }),
+          fixTask(template, { branch, findings, deferred, writableDirs: config.writableDirs, specBody: await readRepoFile(specPathForBranch(branch)) }),
           config,
           exec,
         ),
