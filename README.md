@@ -44,10 +44,10 @@ That history is the point of the demo. The automation caught a real bug, made a 
 |------|------------|
 | [`agent/`](agent) | The spec-driven agent, built on the [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk). It reads a spec, implements it with tests, verifies the result independently, and opens a PR. In fix mode it addresses review findings on its own PRs. |
 | [`review-action/`](review-action) | A GitHub Action that reviews a PR's diff with Claude and posts inline comments on bugs, security issues and missing tests. Other repositories can use it on its own. |
-| [`.github/workflows/`](.github/workflows) | CI (`npm run check`) and the AI review with the fix cycle, both running on this repo's own PRs. |
+| [`.github/workflows/`](.github/workflows) | CI (`npm run check`) and the AI review with the fix cycle on this repo's own PRs; *Implement a spec*, which runs the agent as its GitHub App; and *Release review action*. |
 | [`specs/`](specs) | Feature specs, the agent's input. [`specs/README.md`](specs/README.md) has the template. |
 | [`.claude/skills/write-spec/`](.claude/skills/write-spec/SKILL.md) | A Claude Code skill, `/write-spec <idea>`, that turns a rough idea into a spec: grounded in the code, with the open questions settled and every acceptance criterion testable. |
-| [`.claude/skills/code-spec/`](.claude/skills/code-spec/SKILL.md) | A Claude Code skill, `/code-spec <spec>`, that implements a spec and opens a PR. It asks who codes it: the agent (API spend, guardrails enforced in code) or the Claude Code session itself (no API spend, the agent's brief and checks followed by hand). |
+| [`.claude/skills/code-spec/`](.claude/skills/code-spec/SKILL.md) | A Claude Code skill, `/code-spec <spec>`, that implements a spec and opens a PR. It asks who codes it: the agent, in CI as its GitHub App or locally (API spend, guardrails enforced in code), or the Claude Code session itself (no API spend, the agent's brief and checks followed by hand). |
 | [`demo-app/`](demo-app) | A small TypeScript library the agent works on. |
 | [`org-standards/`](org-standards) | Sample org engineering standards. **A stand-in for a separate platform repo**, kept here so the demo is self-contained. See [Org standards](#org-standards). |
 | [`standards/`](standards) | The parser and selector for those standards, shared by the agent and the review action. |
