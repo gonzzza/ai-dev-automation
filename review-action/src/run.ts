@@ -3,7 +3,7 @@ import { DEFAULT_EXCLUDE, selectFiles } from "./diff.js";
 import { publishReview, supersedePreviousReviews, type Octokit } from "./publish.js";
 import { anchorFindings, renderSummary } from "./render.js";
 import { EFFORTS, reviewDiff, type Effort } from "./review.js";
-import { bySeverityDesc, parseFailOn, shouldFail } from "./schema.js";
+import { bySeverityDesc, parseFailOn, shouldFail, type Finding } from "./schema.js";
 
 /** The parts of @actions/core this action uses. */
 export interface ActionIO {
@@ -31,6 +31,29 @@ export interface RunDeps {
   pullRequest: PullRequestPayload | undefined;
   createOctokit(token: string): Pick<Octokit, "rest" | "graphql" | "paginate">;
   createAnthropic(apiKey: string): Pick<Anthropic, "beta">;
+}
+
+/** Caps for `findings-json`. Consumers often pass it through an env var, and Linux caps one at 128 KB. */
+export const FINDINGS_JSON_MAX_BYTES = 64_000;
+export const FINDING_BODY_MAX_CHARS = 4_000;
+
+/**
+ * The findings for automation downstream, such as the agent's fix cycle: most severe first, long
+ * bodies truncated, and lower-severity findings dropped once the JSON would pass the size cap.
+ * The inline comments always carry everything. Model output: consumers must validate it.
+ */
+export function findingsJson(findings: Finding[]): string {
+  const kept: Finding[] = [];
+  let size = 2; // "[]"
+  for (const finding of [...findings].sort(bySeverityDesc)) {
+    const body = finding.body.length > FINDING_BODY_MAX_CHARS ? `${finding.body.slice(0, FINDING_BODY_MAX_CHARS)}…` : finding.body;
+    const entry = { ...finding, body };
+    const entrySize = Buffer.byteLength(JSON.stringify(entry)) + 1; // UTF-8 bytes, + the comma
+    if (size + entrySize > FINDINGS_JSON_MAX_BYTES) break;
+    kept.push(entry);
+    size += entrySize;
+  }
+  return JSON.stringify(kept);
 }
 
 const errorMessage = (error: unknown) => (error instanceof Error ? error.message : String(error));
@@ -94,8 +117,7 @@ export async function run({ io, repo: { owner, repo }, pullRequest: pr, createOc
 
   io.setOutput("findings", String(findings.length));
   io.setOutput("highest-severity", [...findings].sort(bySeverityDesc)[0]?.severity ?? "none");
-  // For automation downstream, such as the agent's fix cycle. Model output: consumers must validate it.
-  io.setOutput("findings-json", JSON.stringify([...findings].sort(bySeverityDesc)));
+  io.setOutput("findings-json", findingsJson(findings));
 
   if (shouldFail(findings, failOn)) {
     io.setFailed(`Found issues at or above severity "${failOn}".`);
