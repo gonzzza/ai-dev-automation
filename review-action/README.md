@@ -36,7 +36,9 @@ jobs:
 | `max-diff-chars` | `400000` | Diff budget. Files past it are listed as not reviewed, never silently truncated. |
 | `exclude` | | Extra glob patterns to skip, one per line. Lockfiles, `dist/`, `*.map`, `*.snap` and `*.min.js` are always skipped. |
 
-Outputs: `findings` (count), `highest-severity`, and `findings-json`: the findings as a JSON array, most severe first, for automation such as the [agent's fix cycle](../agent#fix-cycle). It is model output, so validate it before acting on it.
+Outputs: `findings` (count), `highest-severity`, and `findings-json`: the findings as a JSON array, most severe first, for automation such as the [agent's fix cycle](../agent#fix-cycle). A finding posted as an inline comment carries that comment's `commentId`, so automation can reply on its thread. It is model output, so validate it before acting on it.
+
+Each run collapses the previous AI review's inline comments as outdated, except threads someone replied to: those stay visible as the record of how the finding was settled.
 
 ## How it works
 

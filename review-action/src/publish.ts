@@ -60,13 +60,40 @@ export async function publishReview(
   }
 }
 
+/**
+ * The ids of the inline comments a review created, in the order of `inline` (undefined where none
+ * matched). createReview doesn't return them, so they are read back and matched on path, line and
+ * body; identical comments are matched in order.
+ */
+export async function inlineCommentIds(
+  octokit: Pick<Octokit, "rest" | "paginate">,
+  target: PublishTarget,
+  reviewId: number,
+  inline: InlineComment[],
+): Promise<(number | undefined)[]> {
+  const { owner, repo, pullNumber } = target;
+  const posted = await octokit.paginate(octokit.rest.pulls.listCommentsForReview, {
+    owner,
+    repo,
+    pull_number: pullNumber,
+    review_id: reviewId,
+    per_page: 100,
+  });
+  const unclaimed = [...posted];
+  return inline.map((c) => {
+    const body = fitBody(c.body);
+    const i = unclaimed.findIndex((p) => p.path === c.path && (p.line ?? p.original_line) === c.line && p.body === body);
+    return i === -1 ? undefined : unclaimed.splice(i, 1)[0]!.id;
+  });
+}
+
 const MINIMIZE = `mutation($id: ID!) {
   minimizeComment(input: { subjectId: $id, classifier: OUTDATED }) { clientMutationId }
 }`;
 
 /**
  * Keep one live AI review per PR: earlier ones by the same author get their body replaced and
- * their inline comments collapsed as outdated. Runs after the new review is
+ * their unanswered inline comments collapsed as outdated. Runs after the new review is
  * posted, so a failed run never leaves the PR without a review.
  * Returns the number of reviews superseded.
  */
@@ -83,6 +110,13 @@ export async function supersedePreviousReviews(
     (r) => r.id !== latest.reviewId && r.user?.login === latest.author && r.body.includes(REVIEW_MARKER),
   );
 
+  if (stale.length === 0) return 0;
+
+  // A thread someone replied to (such as the fix cycle's "Fixed in <sha>") stays visible: the
+  // conversation is the record of how the finding was settled.
+  const all = await octokit.paginate(octokit.rest.pulls.listReviewComments, { owner, repo, pull_number: pullNumber, per_page: 100 });
+  const answered = new Set(all.map((c) => c.in_reply_to_id).filter((id) => id !== undefined));
+
   for (const review of stale) {
     await octokit.rest.pulls.updateReview({ owner, repo, pull_number: pullNumber, review_id: review.id, body: SUPERSEDED_BODY });
     const comments = await octokit.paginate(octokit.rest.pulls.listCommentsForReview, {
@@ -93,6 +127,7 @@ export async function supersedePreviousReviews(
       per_page: 100,
     });
     for (const comment of comments) {
+      if (answered.has(comment.id)) continue;
       await octokit.graphql(MINIMIZE, { id: comment.node_id });
     }
   }

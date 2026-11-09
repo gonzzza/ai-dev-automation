@@ -1,6 +1,6 @@
 import type Anthropic from "@anthropic-ai/sdk";
 import { DEFAULT_EXCLUDE, selectFiles } from "./diff.js";
-import { publishReview, supersedePreviousReviews, type Octokit } from "./publish.js";
+import { inlineCommentIds, publishReview, supersedePreviousReviews, type Octokit } from "./publish.js";
 import { anchorFindings, renderSummary } from "./render.js";
 import { EFFORTS, reviewDiff, type Effort } from "./review.js";
 import { bySeverityDesc, parseFailOn, shouldFail, type Finding } from "./schema.js";
@@ -41,9 +41,10 @@ const clip = (text: string, max: number) => (text.length > max ? `${text.slice(0
 /**
  * The findings for automation downstream, such as the agent's fix cycle: most severe first, long
  * bodies truncated, and lower-severity findings dropped once the JSON would pass the size cap.
- * The inline comments always carry everything. Model output: consumers must validate it.
+ * A finding posted as an inline comment carries that comment's `commentId`, so a fixer can reply
+ * on its thread. The inline comments always carry everything. Model output: consumers must validate it.
  */
-export function findingsJson(findings: Finding[]): string {
+export function findingsJson(findings: Finding[], commentIds: ReadonlyMap<Finding, number> = new Map()): string {
   const kept: Finding[] = [];
   let size = 2; // "[]"
   for (const finding of [...findings].sort(bySeverityDesc)) {
@@ -54,6 +55,7 @@ export function findingsJson(findings: Finding[]): string {
       path: clip(finding.path, 500),
       title: clip(finding.title, 300),
       body: clip(finding.body, FINDING_BODY_MAX_CHARS),
+      ...(commentIds.has(finding) ? { commentId: commentIds.get(finding)! } : {}),
     };
     const entrySize = Buffer.byteLength(JSON.stringify(entry)) + 1; // UTF-8 bytes, + the comma
     if (size + entrySize > FINDINGS_JSON_MAX_BYTES) break;
@@ -114,6 +116,20 @@ export async function run({ io, repo: { owner, repo }, pullRequest: pr, createOc
   const published = await publishReview(octokit, target, summary, inline, anchored);
   io.info(`Posted review: ${findings.length} finding(s), ${inline.length} inline (${published.mode}).`);
 
+  // For the fix cycle's replies. Optional: without ids the findings still work, just without threads.
+  const commentIds = new Map<Finding, number>();
+  if (published.mode === "inline") {
+    try {
+      const ids = await inlineCommentIds(octokit, target, published.reviewId, inline);
+      anchored.forEach((finding, i) => {
+        const id = ids[i];
+        if (id !== undefined) commentIds.set(finding, id);
+      });
+    } catch (error) {
+      io.warning(`Could not read back the inline comment ids: ${errorMessage(error)}`);
+    }
+  }
+
   try {
     const superseded = await supersedePreviousReviews(octokit, target, published);
     if (superseded) io.info(`Marked ${superseded} earlier AI review(s) as outdated.`);
@@ -124,7 +140,7 @@ export async function run({ io, repo: { owner, repo }, pullRequest: pr, createOc
 
   io.setOutput("findings", String(findings.length));
   io.setOutput("highest-severity", [...findings].sort(bySeverityDesc)[0]?.severity ?? "none");
-  io.setOutput("findings-json", findingsJson(findings));
+  io.setOutput("findings-json", findingsJson(findings, commentIds));
 
   if (shouldFail(findings, failOn)) {
     io.setFailed(`Found issues at or above severity "${failOn}".`);

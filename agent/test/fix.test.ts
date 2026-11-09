@@ -30,6 +30,7 @@ const finding = (over: Partial<Finding> = {}): Finding => ({
 describe("parseFindings", () => {
   it("accepts the review action's findings-json output", () => {
     expect(parseFindings(JSON.stringify([finding()]))).toEqual([finding()]);
+    expect(parseFindings(JSON.stringify([finding({ commentId: 7 })]))).toEqual([finding({ commentId: 7 })]);
     expect(parseFindings("[]")).toEqual([]);
   });
 
@@ -45,6 +46,7 @@ describe("parseFindings", () => {
     expect(() => parseFindings("not json")).toThrow("not valid JSON");
     expect(() => parseFindings(JSON.stringify([{ ...finding(), severity: "urgent" }]))).toThrow("expected shape");
     expect(() => parseFindings(JSON.stringify({ findings: [] }))).toThrow("expected shape");
+    expect(() => parseFindings(JSON.stringify([{ ...finding(), commentId: "7" }]))).toThrow("expected shape");
   });
 });
 
@@ -191,12 +193,13 @@ function setup({
   tamperGit = false,
 } = {}) {
   let ran = false;
+  let committed = false;
   const git = {
     currentBranch: vi.fn(async () => branch),
     changedFiles: vi.fn(async () => (ran ? changed : [])),
-    headSha: vi.fn(async () => head),
+    headSha: vi.fn(async () => (committed ? "f1x5ha" : head)),
     fingerprint: vi.fn(async () => (tamperGit && ran ? "changed" : "same")),
-    commit: vi.fn(async (_files: string[], _message: string) => {}),
+    commit: vi.fn(async (_files: string[], _message: string) => void (committed = true)),
     push: vi.fn(async () => ""),
     pullRequest: vi.fn(async () => ({
       state: "OPEN",
@@ -208,6 +211,8 @@ function setup({
     })),
     cycleTrailers: vi.fn(async () => trailers),
     commentOnPullRequest: vi.fn(async (_number: number, _body: string) => "https://github.com/o/r/pull/5#issuecomment-1"),
+    replyToReviewComment: vi.fn(async (_number: number, _commentId: number, _body: string) => {}),
+    resolveReviewThread: vi.fn(async (_number: number, _commentId: number) => {}),
   } satisfies FixGitOps;
   const run: AgentRun<FixReport> = { report: agentReport, costUsd: 0.42, turns: 7, durationMs: 30_000 };
   const deps: FixDeps = {
@@ -251,6 +256,60 @@ describe("runFixCycle", () => {
     expect(comment).toContain("**Fix cycle 1 of 5.**");
     expect(comment).toContain("✅ Fixed · medium: Backwards clock jump freezes refill");
     expect(comment).toContain("**Left for human review:**\n\n- low: No concurrency test (`demo-app/src/rate-limiter.ts:73`)");
+  });
+
+  describe("replies on the findings' review threads", () => {
+    const threaded = [finding({ commentId: 101 }), finding({ line: 90, title: "Unanchored" }), finding({ line: 120, title: "Wrong", commentId: 103 })];
+    const mixed = report({
+      outcomes: [
+        { finding: 1, outcome: "fixed", explanation: "Re-anchored\nthe clock." },
+        { finding: 2, outcome: "fixed", explanation: "Also fixed." },
+        { finding: 3, outcome: "declined", explanation: "The spec allows it." },
+      ],
+    });
+
+    it("replies with the fix commit after the push, resolves fixed threads, and skips findings without a thread", async () => {
+      const { deps, git } = setup({ findings: threaded, agentReport: mixed });
+      expect(await runFixCycle(deps)).toMatchObject({ status: "fixed" });
+
+      expect(git.replyToReviewComment.mock.calls).toEqual([
+        [5, 101, "🤖 ✅ **Fixed in f1x5ha** (fix cycle 1).\n\nRe-anchored the clock."],
+        [5, 103, "🤖 ❎ **Declined** in fix cycle 1; left for a human reviewer.\n\nThe spec allows it."],
+      ]);
+      expect(git.resolveReviewThread.mock.calls).toEqual([[5, 101]]); // declined threads stay open for the human
+      expect(git.push.mock.invocationCallOrder[0]).toBeLessThan(git.replyToReviewComment.mock.invocationCallOrder[0]!);
+    });
+
+    it("replies only to declined findings when nothing was committed", async () => {
+      const { deps, git } = setup({ findings: threaded, agentReport: mixed, changed: [] });
+      expect(await runFixCycle(deps)).toMatchObject({ status: "declined" });
+      expect(git.replyToReviewComment.mock.calls.map(([, id]) => id)).toEqual([103]);
+      expect(git.resolveReviewThread).not.toHaveBeenCalled();
+    });
+
+    it("keeps going, and keeps the result, when a reply fails", async () => {
+      const { deps, git } = setup({ findings: threaded, agentReport: mixed });
+      const log = vi.fn();
+      deps.log = log;
+      git.replyToReviewComment.mockRejectedValueOnce(new Error("HTTP 404"));
+      expect(await runFixCycle(deps)).toMatchObject({ status: "fixed" });
+      expect(log).toHaveBeenCalledWith(expect.stringContaining("could not reply on review comment 101: HTTP 404"));
+      expect(git.replyToReviewComment).toHaveBeenCalledTimes(2);
+    });
+
+    it("scans the replies for secrets before anything is committed", async () => {
+      const leaky = report({ outcomes: [{ finding: 1, outcome: "fixed", explanation: "Used sk-test-value-from-the-env" }] });
+      const { deps, git } = setup({ findings: [finding({ commentId: 101 })], agentReport: leaky });
+      await expect(runFixCycle(deps)).rejects.toThrow("Possible secret in");
+      expect(git.commit).not.toHaveBeenCalled();
+      expect(git.replyToReviewComment).not.toHaveBeenCalled();
+    });
+
+    it("posts no replies when the findings have no comment ids", async () => {
+      const { deps, git } = setup();
+      await runFixCycle(deps);
+      expect(git.replyToReviewComment).not.toHaveBeenCalled();
+    });
   });
 
   it.each([
