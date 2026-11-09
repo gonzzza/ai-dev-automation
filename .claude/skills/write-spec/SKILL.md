@@ -2,6 +2,7 @@
 name: write-spec
 description: Turn a rough feature idea into a spec that a coding agent (or engineer) can implement as one pull request without guessing. Grounds the spec in the actual code, asks only the questions that change the outcome, gives every acceptance criterion a testable ID, and validates the file. Use when the user wants to write, draft or create a spec, or turn an idea into a spec.
 argument-hint: <rough idea, e.g. "circuit breaker for outbound calls">
+effort: high
 ---
 
 # Write a spec
