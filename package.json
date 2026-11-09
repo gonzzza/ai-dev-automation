@@ -9,14 +9,16 @@
   },
   "workspaces": [
     "demo-app",
-    "review-action"
+    "review-action",
+    "agent"
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",
     "test": "npm test --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "lint": "eslint .",
-    "check": "npm run lint && npm run typecheck && npm test"
+    "check": "npm run lint && npm run typecheck && npm test",
+    "agent": "npm start -w agent --"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",
