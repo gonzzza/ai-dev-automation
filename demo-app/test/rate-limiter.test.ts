@@ -133,17 +133,28 @@ describe("createRateLimiter", () => {
     expect(Math.min(...seen)).toBeGreaterThanOrEqual(0);
   });
 
-  it("ignores a clock that goes backwards", () => {
+  it("resumes refill from the new time after the clock goes backwards", () => {
     const { limiter, advance } = setup({ capacity: 10, refillPerSecond: 2 });
     limiter.tryRemove(10);
     advance(-500);
+    // The backwards step credits no tokens.
     expect(limiter.available()).toBe(0);
     expect(limiter.waitTime()).toBeCloseTo(500);
-    // Time lost going backwards is not credited when the clock catches up.
-    advance(500);
-    expect(limiter.available()).toBe(0);
-    advance(500);
+    // Refill resumes from the new time instead of waiting for the old one.
+    advance(250);
+    expect(limiter.available()).toBeCloseTo(0.5);
+    advance(250);
     expect(limiter.available()).toBeCloseTo(1);
+  });
+
+  it("acquire sleeps once after a large backwards clock step", async () => {
+    const { limiter, advance, sleeps } = setup({ capacity: 2, refillPerSecond: 2 });
+    limiter.tryRemove(2);
+    advance(-3_600_000);
+    await limiter.acquire();
+    expect(sleeps).toHaveLength(1);
+    expect(sleeps[0]).toBeCloseTo(500);
+    expect(limiter.available()).toBeCloseTo(0);
   });
 
   it("acquire does not sleep when tokens are available", async () => {

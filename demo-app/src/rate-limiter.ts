@@ -41,10 +41,12 @@ export function createRateLimiter(options: RateLimiterOptions): RateLimiter {
 
   const refill = (): void => {
     const current = now();
+    // A clock that steps backwards (Date.now is not monotonic) credits nothing,
+    // but refill resumes from the new time rather than stalling until the old one.
     if (current > last) {
       tokens = Math.min(capacity, tokens + ((current - last) * refillPerSecond) / 1000);
-      last = current;
     }
+    last = current;
   };
 
   const validate = (count: number): void => {
