@@ -52,6 +52,11 @@ describe("parseSpec", () => {
       expect(parseSpec("specs/a.md", body).criteria[0]).toEqual({ id: "AC1", text: "A new limiter is full. - for every option" });
     });
 
+    it("keeps reading criteria after a code block with a # comment in it", () => {
+      const body = VALID.replace("- AC2", "```sh\n# start the server\n## not a heading either\n```\n- AC2");
+      expect(parseSpec("specs/a.md", body).criteria.map((c) => c.id)).toEqual(["AC1", "AC2"]);
+    });
+
     it("ignores bullets inside fenced code blocks", () => {
       const body = VALID.replace("- AC2", "```ts\n- not a criterion\n```\n- AC2");
       expect(parseSpec("specs/a.md", body).criteria).toEqual([

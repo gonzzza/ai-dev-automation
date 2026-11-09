@@ -41,12 +41,21 @@ export function parseSpec(rawPath: string, body: string): Spec {
   return { path, slug, title, body, criteria: parseCriteria(path, section(body, "Acceptance criteria")) };
 }
 
-/** The lines under a "## name" heading, up to the next "## " heading. */
+const FENCE = /^\s*(```|~~~)/;
+
+/**
+ * The lines under a "## name" heading, up to the next "# " or "## " heading. Lines inside fenced
+ * code blocks are never headings, so a "# comment" in a shell snippet doesn't end the section.
+ */
 function section(body: string, name: string): string[] {
   const lines = body.split(/\r?\n/);
   const start = lines.findIndex((l) => /^##\s+/.test(l) && l.replace(/^##\s+/, "").trim().toLowerCase() === name.toLowerCase());
   const rest = lines.slice(start + 1);
-  const end = rest.findIndex((l) => /^##?\s+/.test(l));
+  let inFence = false;
+  const end = rest.findIndex((l) => {
+    if (FENCE.test(l)) inFence = !inFence;
+    return !inFence && /^##?\s+/.test(l);
+  });
   return end === -1 ? rest : rest.slice(0, end);
 }
 
@@ -62,7 +71,7 @@ function parseCriteria(path: string, lines: string[]): Criterion[] {
   let open: Criterion | undefined;
   let inFence = false;
   for (const line of lines) {
-    if (/^\s*(```|~~~)/.test(line)) {
+    if (FENCE.test(line)) {
       inFence = !inFence;
       open = undefined;
       continue;
