@@ -96,14 +96,14 @@ export function describeMessage(message: SDKMessage, repoRoot?: string): string 
   return lines.length ? lines.join("\n") : undefined;
 }
 
-export async function runAgent<Report>(
-  task: AgentTask<Report>,
-  config: AgentConfig,
-  exec: Exec,
-  log: (line: string) => void = console.log,
-): Promise<AgentRun<Report>> {
+/**
+ * The SDK options for one session: limits, the system prompt with any org standards, the tool
+ * allowlist and the policy wiring. Separate from runAgent so tests can check the guardrails are
+ * actually attached without starting a session.
+ */
+export function agentOptions<Report>(task: AgentTask<Report>, config: AgentConfig, exec: Exec): Options {
   const policy = { repoRoot: config.repoRoot, writableDirs: config.writableDirs };
-  const options: Options = {
+  return {
     cwd: config.repoRoot,
     model: config.model,
     effort: config.effort,
@@ -135,7 +135,15 @@ export async function runAgent<Report>(
     outputFormat: { type: "json_schema", schema: z.toJSONSchema(task.schema, { target: "draft-7" }) as Record<string, unknown> },
     persistSession: false,
   };
+}
 
+export async function runAgent<Report>(
+  task: AgentTask<Report>,
+  config: AgentConfig,
+  exec: Exec,
+  log: (line: string) => void = console.log,
+): Promise<AgentRun<Report>> {
+  const options = agentOptions(task, config, exec);
   config.runLog?.event({ type: "agent.start", model: config.model, effort: config.effort, maxTurns: config.maxTurns, maxBudgetUsd: config.maxBudgetUsd, prompt: task.prompt });
   for await (const message of query({ prompt: task.prompt, options })) {
     config.runLog?.event({ type: "sdk.message", message });
