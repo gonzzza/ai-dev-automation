@@ -39,6 +39,7 @@ These checks only read state. Run them all, then report every problem together, 
 | Check | How | Typical fix |
 |-------|-----|-------------|
 | On the base branch (`<base>`, default `main`) | `git branch --show-current` | Commit or stash the current work, then `git switch <base> && git pull` |
+| Base up to date | After `git fetch origin`: `git rev-list --count <base>..origin/<base>` is 0 and `git rev-list --count origin/<base>..<base>` is 0 | Behind: `git pull --ff-only`. Ahead: the local base has unpushed commits, so ask the user. Branching from a stale base makes the PR diff against old code and records the wrong `--standards-ref`. |
 | Clean tree | `git status --porcelain` | Commit or stash. Untracked files count as changes. |
 | Spec committed on the base | `git fetch origin` then `git cat-file -e origin/<base>:specs/<file>` | Merge the spec's PR first. A spec that exists only on a branch is lost when you switch to `<base>`. |
 | Branch names are free | `git branch --list` and `git ls-remote --heads origin` for both `agent/<name>` and `spec/<name>` | Delete the branch, but only after the next check |
@@ -82,7 +83,7 @@ Then go to step 5.
 
 You do the agent's job and the harness's job, under the same rules.
 
-**Snapshot, then branch.** Before creating the branch, save the git state that gate 2 compares against to files in your scratchpad (or another temp directory outside the repo): the output of `ls -la .git/hooks` and of `git config --local --list`. Then `git switch -c spec/<name>` from the up-to-date base.
+**Branch, then snapshot.** `git switch -c spec/<name>` from the up-to-date base. Then, before any other change, save the git state that gate 2 compares against to files in your scratchpad (or another temp directory outside the repo): the output of `ls -la .git/hooks` and of `git config --local --list`. Taking it after the branch exists means config written by branch creation itself (for example with `branch.autoSetupMerge`) doesn't trip the gate. The agent's harness uses the same order.
 
 **Brief.** Follow [`agent/prompt.md`](../../../agent/prompt.md) as your brief, with the scope from step 3 as the writable directories:
 
