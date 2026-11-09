@@ -36,7 +36,7 @@ jobs:
 | `max-diff-chars` | `400000` | Diff budget. Files past it are listed as not reviewed, never silently truncated. |
 | `exclude` | | Extra glob patterns to skip, one per line. Lockfiles, `dist/`, `*.map`, `*.snap` and `*.min.js` are always skipped. |
 
-Outputs: `findings` (count) and `highest-severity`.
+Outputs: `findings` (count), `highest-severity`, and `findings-json`: the findings as a JSON array, most severe first, for automation such as the [agent's fix cycle](../agent#fix-cycle). It is model output, so validate it before acting on it.
 
 ## How it works
 

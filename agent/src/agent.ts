@@ -31,8 +31,8 @@ export interface AgentConfig {
   checksEnv?: NodeJS.ProcessEnv;
 }
 
-export interface AgentRun {
-  report: AgentReport;
+export interface AgentRun<Report = AgentReport> {
+  report: Report;
   costUsd: number;
   turns: number;
   durationMs: number;
@@ -46,20 +46,30 @@ export async function loadPromptTemplate(path: string = PROMPT_FILE): Promise<st
 }
 
 /**
- * Fills the {{placeholders}} in the prompt template. One pass, so placeholder-like text inside the
- * spec is never expanded, and an unknown placeholder is an error rather than a silent gap in the prompt.
+ * Fills the {{placeholders}} in a prompt template. One pass, so placeholder-like text inside the
+ * values is never expanded, and an unknown placeholder is an error rather than a silent gap in the prompt.
  */
-export function buildPrompt(template: string, spec: Spec, writableDirs: string[]): string {
-  const values: Record<string, string> = {
-    writableDirs: writableDirs.join(", "),
-    specPath: spec.path,
-    specBody: spec.body,
-  };
+export function fillTemplate(template: string, values: Record<string, string>): string {
   return template.trimEnd().replace(/\{\{(\w+)\}\}/g, (match, name: string) => {
     const value = values[name];
     if (value === undefined) throw new Error(`Unknown placeholder ${match} in the prompt template.`);
     return value;
   });
+}
+
+export function buildPrompt(template: string, spec: Spec, writableDirs: string[]): string {
+  return fillTemplate(template, { writableDirs: writableDirs.join(", "), specPath: spec.path, specBody: spec.body });
+}
+
+/** What one agent session is asked to do, and the shape of the report it must return. */
+export interface AgentTask<Report> {
+  prompt: string;
+  schema: z.ZodType<Report>;
+}
+
+/** The implement-a-spec task, from agent/prompt.md. */
+export async function specTask(spec: Spec, writableDirs: string[]): Promise<AgentTask<AgentReport>> {
+  return { prompt: buildPrompt(await loadPromptTemplate(), spec, writableDirs), schema: AgentReportSchema };
 }
 
 /** One line per notable event, so a human watching the terminal can follow along. */
@@ -77,12 +87,12 @@ export function describeMessage(message: SDKMessage, repoRoot?: string): string 
   return lines.length ? lines.join("\n") : undefined;
 }
 
-export async function runAgent(
-  spec: Spec,
+export async function runAgent<Report>(
+  task: AgentTask<Report>,
   config: AgentConfig,
   exec: Exec,
   log: (line: string) => void = console.log,
-): Promise<AgentRun> {
+): Promise<AgentRun<Report>> {
   const policy = { repoRoot: config.repoRoot, writableDirs: config.writableDirs };
   const options: Options = {
     cwd: config.repoRoot,
@@ -100,12 +110,11 @@ export async function runAgent(
     permissionMode: "default",
     hooks: { PreToolUse: [{ hooks: [createPolicyHook(policy)] }] },
     canUseTool: createToolPolicy(policy),
-    outputFormat: { type: "json_schema", schema: AGENT_REPORT_JSON_SCHEMA },
+    outputFormat: { type: "json_schema", schema: z.toJSONSchema(task.schema, { target: "draft-7" }) as Record<string, unknown> },
     persistSession: false,
   };
 
-  const prompt = buildPrompt(await loadPromptTemplate(), spec, config.writableDirs);
-  for await (const message of query({ prompt, options })) {
+  for await (const message of query({ prompt: task.prompt, options })) {
     const line = describeMessage(message, config.repoRoot);
     if (line) log(line);
 
@@ -114,7 +123,7 @@ export async function runAgent(
         const reason = message.subtype === "success" ? message.result : message.subtype;
         throw new Error(`Agent stopped without finishing: ${reason} (cost $${message.total_cost_usd.toFixed(2)}).`);
       }
-      const report = AgentReportSchema.safeParse(message.structured_output);
+      const report = task.schema.safeParse(message.structured_output);
       if (!report.success) throw new Error(`Agent report did not match the schema: ${report.error.message}`);
       return { report: report.data, costUsd: message.total_cost_usd, turns: message.num_turns, durationMs: message.duration_ms };
     }
