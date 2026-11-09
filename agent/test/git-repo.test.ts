@@ -55,6 +55,23 @@ describe("Git, against a real repo", () => {
     expect(await git.fingerprint()).not.toBe(reset);
   });
 
+  it("ignores the merge-base key VS Code adds for a new branch, but not other branch config", async () => {
+    const git = new Git(exec, dir);
+    const before = await git.fingerprint();
+    sh("config", "branch.agent/x.vscode-merge-base", "origin/main"); // what VS Code wrote mid-run
+    expect(await git.fingerprint()).toBe(before);
+
+    sh("config", "branch.agent/x.pushRemote", "planted");
+    expect(await git.fingerprint()).not.toBe(before);
+  });
+
+  it("falls back to the raw text when the config can't be parsed, so the change still counts", async () => {
+    const git = new Git(exec, dir);
+    const before = await git.fingerprint();
+    writeFileSync(join(dir, ".git", "config.worktree"), "[core\n"); // not valid config syntax
+    expect(await git.fingerprint()).not.toBe(before);
+  });
+
   it("covers the shared config from a linked worktree", async () => {
     const worktree = `${dir}-wt`;
     sh("worktree", "add", "-q", worktree, "-b", "agent/wt");
