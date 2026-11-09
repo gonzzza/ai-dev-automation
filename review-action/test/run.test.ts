@@ -90,7 +90,11 @@ describe("run", () => {
     const review = pulls.createReview.mock.calls[0]![0];
     expect(review).toMatchObject({ pull_number: 7, commit_id: "abc", event: "COMMENT" });
     expect(review.comments.map((c: { line: number }) => c.line)).toEqual([2, 1]);
-    expect(outputs).toEqual({ findings: "2", "highest-severity": "high" });
+    expect(outputs).toMatchObject({ findings: "2", "highest-severity": "high" });
+    // Most severe first, with everything a downstream fixer needs to locate and understand each one.
+    const json = JSON.parse(outputs["findings-json"]!) as { severity: string; line: number; path: string; body: string }[];
+    expect(json.map((f) => [f.severity, f.line])).toEqual([["high", 2], ["low", 1]]);
+    expect(json[0]).toMatchObject({ path: expect.any(String), body: expect.any(String) });
     expect(io.setFailed).not.toHaveBeenCalled();
   });
 
@@ -116,7 +120,7 @@ describe("run", () => {
     await run(deps);
     expect(stream).not.toHaveBeenCalled();
     expect(pulls.createReview).not.toHaveBeenCalled();
-    expect(outputs).toEqual({ findings: "0", "highest-severity": "none" });
+    expect(outputs).toEqual({ findings: "0", "highest-severity": "none", "findings-json": "[]" });
   });
 
   it("reports files beyond what GitHub's files API lists", async () => {

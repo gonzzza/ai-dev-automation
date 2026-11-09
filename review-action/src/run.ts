@@ -66,6 +66,7 @@ export async function run({ io, repo: { owner, repo }, pullRequest: pr, createOc
     io.info("Nothing to review.");
     io.setOutput("findings", "0");
     io.setOutput("highest-severity", "none");
+    io.setOutput("findings-json", "[]");
     return;
   }
 
@@ -93,6 +94,8 @@ export async function run({ io, repo: { owner, repo }, pullRequest: pr, createOc
 
   io.setOutput("findings", String(findings.length));
   io.setOutput("highest-severity", [...findings].sort(bySeverityDesc)[0]?.severity ?? "none");
+  // For automation downstream, such as the agent's fix cycle. Model output: consumers must validate it.
+  io.setOutput("findings-json", JSON.stringify([...findings].sort(bySeverityDesc)));
 
   if (shouldFail(findings, failOn)) {
     io.setFailed(`Found issues at or above severity "${failOn}".`);

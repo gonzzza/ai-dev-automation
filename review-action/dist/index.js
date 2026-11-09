@@ -77082,6 +77082,7 @@ async function run({ io, repo: { owner, repo }, pullRequest: pr, createOctokit, 
     io.info("Nothing to review.");
     io.setOutput("findings", "0");
     io.setOutput("highest-severity", "none");
+    io.setOutput("findings-json", "[]");
     return;
   }
   const result = await reviewDiff(
@@ -77104,6 +77105,7 @@ async function run({ io, repo: { owner, repo }, pullRequest: pr, createOctokit, 
   }
   io.setOutput("findings", String(findings.length));
   io.setOutput("highest-severity", [...findings].sort(bySeverityDesc)[0]?.severity ?? "none");
+  io.setOutput("findings-json", JSON.stringify([...findings].sort(bySeverityDesc)));
   if (shouldFail(findings, failOn)) {
     io.setFailed(`Found issues at or above severity "${failOn}".`);
   }
