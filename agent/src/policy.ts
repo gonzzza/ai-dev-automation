@@ -5,6 +5,13 @@ import { isSecretFile } from "./secrets.js";
 
 export const CHECKS_TOOL = "mcp__repo__run_checks";
 
+/**
+ * The SDK tool the agent calls to return its final report when `outputFormat` is a JSON schema.
+ * It only carries data: the harness validates the report against the schema and scans the PR body
+ * for secrets. Denying it leaves the result without `structured_output`, so the run fails.
+ */
+export const REPORT_TOOL = "StructuredOutput";
+
 /** Built-in tools the agent may see at all. No Bash, web or subagent tools. */
 export const AGENT_TOOLS = ["Read", "Write", "Edit", "Glob", "Grep"];
 
@@ -103,13 +110,13 @@ function targetPath(input: Record<string, unknown>): string | undefined {
 
 /**
  * Decide every tool call: reads inside the repo except secret files (.env, keys), writes only inside
- * `writableDirs`, the checks tool, and nothing else. Denials go back to the
+ * `writableDirs`, the checks tool, the report tool, and nothing else. Denials go back to the
  * model as a message, so it can correct course instead of failing the run.
  */
 export function decide(toolName: string, input: Record<string, unknown>, { repoRoot, writableDirs }: PolicyOptions): PermissionResult {
   const deny = (message: string): PermissionResult => ({ behavior: "deny", message });
 
-  if (toolName === CHECKS_TOOL) return { behavior: "allow", updatedInput: input };
+  if (toolName === CHECKS_TOOL || toolName === REPORT_TOOL) return { behavior: "allow", updatedInput: input };
 
   if (READ_TOOLS.has(toolName) || WRITE_TOOLS.has(toolName)) {
     const raw = targetPath(input) ?? ".";
