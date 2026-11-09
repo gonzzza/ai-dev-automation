@@ -30,12 +30,28 @@ jobs:
       # Runs the action from this checkout, so every PR exercises the current code.
       # Other repos use: gonzzza/ai-dev-automation/review-action@v1
       - uses: actions/checkout@v7
+      # The org standards, from the PR's base commit: a PR can't change the rules it is reviewed
+      # against. Other repos would check out their platform repo here at a pinned tag instead.
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: .org-standards
+          sparse-checkout: org-standards
+          persist-credentials: false
+      # Empty until the base has standards (e.g. the PR that adds them), which turns the feature off.
+      - id: standards
+        run: |
+          if [ -d .org-standards/org-standards ]; then
+            echo "path=.org-standards/org-standards" >> "$GITHUB_OUTPUT"
+          fi
       - id: review
         uses: ./review-action
         with:
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
           model: ${{ env.REVIEW_MODEL }}
           fail-on: none
+          standards-path: ${{ steps.standards.outputs.path }}
+          standards-ref: ${{ github.event.pull_request.base.sha }}
 
   # Fix cycle: on the agent's own PRs, the agent addresses findings at medium or above, pushes, and
   # the push triggers this workflow again. The agent stops itself after 5 fix commits or when the
