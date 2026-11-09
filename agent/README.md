@@ -40,7 +40,7 @@ spec.md ─▶ preflight ─▶ branch agent/<spec> ─▶ agent loop ─▶ npm
 2. **Agent loop.** Claude gets the spec, the repo's `CLAUDE.md` for conventions, and a fixed toolset. It plans, implements, writes tests and iterates until the checks pass. It returns a structured report (plan, summary, testing, notes) that becomes the PR description.
 3. **Verification.** The harness doesn't take the agent's word for it:
    1. It runs `npm run check` itself.
-   2. It confirms that `.git/config` and `.git/hooks` are unchanged.
+   2. It confirms that the branch, `HEAD`, git config and hooks are unchanged.
    3. It confirms that every changed file is inside `--scope` and none is a protected config file.
    4. It scans the changed files and the PR body for credentials.
 
@@ -58,7 +58,7 @@ The agent's tools are limited in code, so the limits don't depend on the model f
   - Writes are allowed only inside `--scope`, and never in `node_modules`, `.git`, or the files that define how the checks run (`package.json`, `tsconfig*.json`, Vitest and ESLint config). This stops the agent from turning the harness's own check into a no-op.
   - Every other call is denied. The reason goes back to the model so it can correct course.
 - **No credentials in the checks' environment.** `run_checks` gets an environment without the API key, tokens or passwords, and `gh` is logged out.
-- **Safer git after the run.** Every harness git command runs with hooks and fsmonitor disabled. The harness also refuses to continue if the repo's `.git/config` or `.git/hooks` changed during the run, and `.gitattributes` is protected. This closes the in-repo ways planted code could run during the commit and push.
+- **Safer git after the run.** Every harness git command runs with hooks and fsmonitor disabled. The harness also refuses to continue if the checked-out branch or commit, the repo's git config (worktrees included) or its hooks changed during the run. A commit made by test code would otherwise hide its files from the scope gate. `.gitattributes` is protected too. This closes the in-repo ways planted code could run during the commit and push.
 - **Secret scan.** Before committing, the harness scans every changed file and the PR body. It blocks the commit if it finds a credential value from its environment or a known key format.
 - **No git access.** The agent cannot commit, push or touch other branches. The harness does all of that after verification.
 - **Budgets.** `--max-turns` and `--max-budget` stop a runaway loop. Invalid values are rejected, so a typo can't turn a cap off.

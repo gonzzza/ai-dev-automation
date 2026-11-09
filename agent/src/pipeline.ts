@@ -57,7 +57,7 @@ export async function runPipeline(deps: PipelineDeps): Promise<PipelineResult> {
   await git.createBranch(branch);
   log(`Created ${branch}. Running the agent on ${spec.path}...`);
 
-  // Hooks and config under .git are invisible to git status, and agent-written tests could plant them.
+  // Commits, branch switches, hooks and config are invisible to git status, and agent-written tests could make them.
   const gitStateBefore = await git.fingerprint();
 
   const run = await deps.runAgent(spec);
@@ -69,9 +69,12 @@ export async function runPipeline(deps: PipelineDeps): Promise<PipelineResult> {
   if (!checks.passed) throw new Error(`Checks failed after the agent finished. Branch ${branch} kept for inspection.\n\n${checks.output}`);
 
   // The checks run agent-written code too, so everything below inspects the tree after they ran.
-  // Gate 2: .git is exactly as it was, so the commit and push below run no planted hooks or config.
+  // Gate 2: git state is exactly as it was: same branch and commit, so every change is still visible
+  // to the gates below, and same config and hooks, so the commit and push run nothing planted.
   if ((await git.fingerprint()) !== gitStateBefore) {
-    throw new Error(`.git/config or .git/hooks changed during the run. Nothing was committed; inspect them before using branch ${branch}.`);
+    throw new Error(
+      `The git state (HEAD, branch, .git/config or hooks) changed during the run. Nothing was committed; inspect the repo before using branch ${branch}.`,
+    );
   }
 
   // Gate 3: the agent changed something, and only inside its scope, never the files that define the checks.

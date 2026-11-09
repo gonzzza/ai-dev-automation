@@ -38,12 +38,26 @@ export class Git {
     return run(this.exec, "git", [...Git.SAFE, ...args], this.cwd);
   }
 
+  /**
+   * A hash of the git state that agent-run code could change without it showing in `git status`:
+   * the checked-out branch and commit (a commit made during the run would hide its files from the
+   * scope gate), the repo config and the hooks. Uses the common dir, so linked worktrees are covered.
+   */
   async fingerprint(): Promise<string> {
-    const gitDir = await this.git("rev-parse", "--absolute-git-dir");
+    const [head, branch, gitDir, commonDir] = await Promise.all([
+      this.git("rev-parse", "HEAD"),
+      this.currentBranch(),
+      this.git("rev-parse", "--absolute-git-dir"),
+      this.git("rev-parse", "--path-format=absolute", "--git-common-dir"),
+    ]);
     const read = (path: string) => readFile(path, "utf8").catch(() => "<missing>");
-    const hooksDir = join(gitDir, "hooks");
+    const hooksDir = join(commonDir, "hooks");
     const hooks = await readdir(hooksDir).catch(() => [] as string[]);
-    const parts = [`config\n${await read(join(gitDir, "config"))}`];
+    const parts = [
+      `HEAD ${head} ${branch}`,
+      `config\n${await read(join(commonDir, "config"))}`,
+      `config.worktree\n${await read(join(gitDir, "config.worktree"))}`,
+    ];
     for (const name of hooks.sort()) parts.push(`hooks/${name}\n${await read(join(hooksDir, name))}`);
     return createHash("sha256").update(parts.join("\0")).digest("hex");
   }

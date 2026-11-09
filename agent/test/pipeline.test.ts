@@ -110,9 +110,9 @@ describe("runPipeline", () => {
     expect(git.commit).not.toHaveBeenCalled();
   });
 
-  it("stops before any further git command when .git/config or hooks changed during the run", async () => {
+  it("stops before any further git command when HEAD, the branch, .git/config or hooks changed during the run", async () => {
     const { deps, git } = setup({ tamperGit: true });
-    await expect(runPipeline(deps)).rejects.toThrow(/\.git\/config or \.git\/hooks changed/);
+    await expect(runPipeline(deps)).rejects.toThrow("The git state (HEAD, branch, .git/config or hooks) changed during the run");
     expect(git.changedFiles).toHaveBeenCalledTimes(1); // only the preflight, before the agent ran
     expect(git.commit).not.toHaveBeenCalled();
   });
