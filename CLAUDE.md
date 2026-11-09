@@ -14,6 +14,8 @@ A working demo of an AI-assisted delivery loop:
 | `agent/` | Spec-driven agent (Claude Agent SDK). Reads a spec, implements it with tests, opens a PR. |
 | `review-action/` | GitHub Action that reviews a PR diff with Claude and posts inline comments. |
 | `demo-app/` | Small TypeScript library the agent implements specs against. |
+| `standards/` | Parses and selects org engineering standards. Used by the review action and the agent. |
+| `org-standards/` | Sample org standards, standing in for a separate platform repo. |
 | `.github/workflows/` | CI plus the AI review on this repo's own PRs. |
 
 ## Commands
@@ -40,7 +42,7 @@ npm run build       # build all workspaces (review-action bundles to dist/)
 
 ## Workspace rules
 
-- **`review-action/dist/` is committed.** GitHub runs the bundled file directly. After changing `review-action/src`, run `npm run build -w review-action` and commit `dist/` in the same commit. CI fails if `dist/` is stale.
+- **`review-action/dist/` is committed.** GitHub runs the bundled file directly. After changing `review-action/src` **or `standards/src`** (the action bundles the `standards` package), run `npm run build -w review-action` and commit `dist/` in the same commit. CI fails if `dist/` is stale.
 - **`agent/`** must stay within the repo it is pointed at: it works on a fresh branch, never pushes to `main`, and is bounded by turn and budget limits.
 - **`demo-app/`** is the agent's target. Keep it small and idiomatic so agent PRs stay easy to review.
 - **`specs/`** follow the template in `specs/README.md`: goal, requirements, acceptance criteria, out of scope. Each acceptance criterion has a unique ID (`- AC1: ...`), and tests that cover it start with that ID. Write new specs with the `/write-spec` skill (`.claude/skills/write-spec/`).
