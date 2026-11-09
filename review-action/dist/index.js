@@ -76931,6 +76931,22 @@ ${anchored.map(renderFindingListItem).join("\n")}`)
     return { mode: "body-only", reviewId: data.id, author: data.user?.login ?? null };
   }
 }
+async function inlineCommentIds(octokit, target, reviewId, inline) {
+  const { owner, repo, pullNumber } = target;
+  const posted = await octokit.paginate(octokit.rest.pulls.listCommentsForReview, {
+    owner,
+    repo,
+    pull_number: pullNumber,
+    review_id: reviewId,
+    per_page: 100
+  });
+  const unclaimed = [...posted];
+  return inline.map((c) => {
+    const body = fitBody(c.body);
+    const i = unclaimed.findIndex((p) => p.path === c.path && (p.line ?? p.original_line) === c.line && p.body === body);
+    return i === -1 ? void 0 : unclaimed.splice(i, 1)[0].id;
+  });
+}
 var MINIMIZE = `mutation($id: ID!) {
   minimizeComment(input: { subjectId: $id, classifier: OUTDATED }) { clientMutationId }
 }`;
@@ -76941,6 +76957,9 @@ async function supersedePreviousReviews(octokit, target, latest) {
   const stale = reviews.filter(
     (r) => r.id !== latest.reviewId && r.user?.login === latest.author && r.body.includes(REVIEW_MARKER)
   );
+  if (stale.length === 0) return 0;
+  const all = await octokit.paginate(octokit.rest.pulls.listReviewComments, { owner, repo, pull_number: pullNumber, per_page: 100 });
+  const answered = new Set(all.map((c) => c.in_reply_to_id).filter((id) => id !== void 0));
   for (const review of stale) {
     await octokit.rest.pulls.updateReview({ owner, repo, pull_number: pullNumber, review_id: review.id, body: SUPERSEDED_BODY });
     const comments = await octokit.paginate(octokit.rest.pulls.listCommentsForReview, {
@@ -76951,6 +76970,7 @@ async function supersedePreviousReviews(octokit, target, latest) {
       per_page: 100
     });
     for (const comment of comments) {
+      if (answered.has(comment.id)) continue;
       await octokit.graphql(MINIMIZE, { id: comment.node_id });
     }
   }
@@ -77058,7 +77078,7 @@ async function reviewDiff(client, pr, files, { model, effort }) {
 var FINDINGS_JSON_MAX_BYTES = 64e3;
 var FINDING_BODY_MAX_CHARS = 4e3;
 var clip = (text, max) => text.length > max ? `${text.slice(0, max)}\u2026` : text;
-function findingsJson(findings) {
+function findingsJson(findings, commentIds = /* @__PURE__ */ new Map()) {
   const kept = [];
   let size = 2;
   for (const finding of [...findings].sort(bySeverityDesc)) {
@@ -77066,7 +77086,8 @@ function findingsJson(findings) {
       ...finding,
       path: clip(finding.path, 500),
       title: clip(finding.title, 300),
-      body: clip(finding.body, FINDING_BODY_MAX_CHARS)
+      body: clip(finding.body, FINDING_BODY_MAX_CHARS),
+      ...commentIds.has(finding) ? { commentId: commentIds.get(finding) } : {}
     };
     const entrySize = Buffer.byteLength(JSON.stringify(entry)) + 1;
     if (size + entrySize > FINDINGS_JSON_MAX_BYTES) break;
@@ -77117,6 +77138,18 @@ async function run({ io, repo: { owner, repo }, pullRequest: pr, createOctokit, 
   const target = { owner, repo, pullNumber: pr.number, commitId: pr.head.sha };
   const published = await publishReview(octokit, target, summary2, inline, anchored);
   io.info(`Posted review: ${findings.length} finding(s), ${inline.length} inline (${published.mode}).`);
+  const commentIds = /* @__PURE__ */ new Map();
+  if (published.mode === "inline") {
+    try {
+      const ids = await inlineCommentIds(octokit, target, published.reviewId, inline);
+      anchored.forEach((finding, i) => {
+        const id = ids[i];
+        if (id !== void 0) commentIds.set(finding, id);
+      });
+    } catch (error63) {
+      io.warning(`Could not read back the inline comment ids: ${errorMessage(error63)}`);
+    }
+  }
   try {
     const superseded = await supersedePreviousReviews(octokit, target, published);
     if (superseded) io.info(`Marked ${superseded} earlier AI review(s) as outdated.`);
@@ -77125,7 +77158,7 @@ async function run({ io, repo: { owner, repo }, pullRequest: pr, createOctokit, 
   }
   io.setOutput("findings", String(findings.length));
   io.setOutput("highest-severity", [...findings].sort(bySeverityDesc)[0]?.severity ?? "none");
-  io.setOutput("findings-json", findingsJson(findings));
+  io.setOutput("findings-json", findingsJson(findings, commentIds));
   if (shouldFail(findings, failOn)) {
     io.setFailed(`Found issues at or above severity "${failOn}".`);
   }

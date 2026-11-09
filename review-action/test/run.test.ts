@@ -30,11 +30,13 @@ function setup({
   files = [{ filename: "src/a.ts", status: "added", patch: PATCH }],
   findings = [finding()],
   supersedeError,
+  commentIdsError,
 }: {
   inputs?: Record<string, string>;
   files?: unknown[];
   findings?: Finding[];
   supersedeError?: Error;
+  commentIdsError?: Error;
 } = {}) {
   const all = { ...DEFAULT_INPUTS, ...inputs };
   const outputs: Record<string, string> = {};
@@ -57,6 +59,12 @@ function setup({
   };
   const paginate = vi.fn(async (method: unknown) => {
     if (method === pulls.listFiles) return files;
+    // The inline comments as GitHub returns them after createReview: ids 1000, 1001…
+    if (method === pulls.listCommentsForReview) {
+      if (commentIdsError) throw commentIdsError;
+      const review = pulls.createReview.mock.calls.at(-1)?.[0] as { comments?: { path: string; line: number; body: string }[] } | undefined;
+      return (review?.comments ?? []).map((c, i) => ({ id: 1000 + i, path: c.path, line: c.line, body: c.body }));
+    }
     if (supersedeError) throw supersedeError;
     return [];
   });
@@ -96,6 +104,32 @@ describe("run", () => {
     expect(json.map((f) => [f.severity, f.line])).toEqual([["high", 2], ["low", 1]]);
     expect(json[0]).toMatchObject({ path: expect.any(String), body: expect.any(String) });
     expect(io.setFailed).not.toHaveBeenCalled();
+  });
+
+  it("gives each inline finding the id of its comment, for replies on its thread", async () => {
+    const { deps, outputs } = setup({
+      findings: [finding({ severity: "low", line: 1 }), finding({ severity: "high", line: 2 }), finding({ line: 40, title: "Off the diff" })],
+    });
+    await run(deps);
+    const json = JSON.parse(outputs["findings-json"]!) as { line: number; commentId?: number }[];
+    // Inline comments are posted most severe first: line 2 is comment 1000, line 1 is 1001.
+    expect(json.map((f) => [f.line, f.commentId])).toEqual([[2, 1000], [40, undefined], [1, 1001]]);
+  });
+
+  it("leaves comment ids out when the inline comments were rejected", async () => {
+    const { deps, outputs, pulls } = setup();
+    pulls.createReview
+      .mockRejectedValueOnce(Object.assign(new Error("Unprocessable"), { status: 422 }))
+      .mockResolvedValue({ data: { id: 100, user: null } });
+    await run(deps);
+    expect(JSON.parse(outputs["findings-json"]!)).toEqual([finding()]);
+  });
+
+  it("warns and still sets outputs when the comment ids can't be read", async () => {
+    const { deps, io, outputs } = setup({ commentIdsError: new Error("rate limited") });
+    await run(deps);
+    expect(io.warning).toHaveBeenCalledWith(expect.stringContaining("rate limited"));
+    expect(JSON.parse(outputs["findings-json"]!)).toEqual([finding()]);
   });
 
   it("skips with a warning when the API key is missing (fork PRs)", async () => {
@@ -170,5 +204,10 @@ describe("findingsJson", () => {
   it("keeps small reviews whole", () => {
     expect(JSON.parse(findingsJson([finding()]))).toEqual([finding()]);
     expect(findingsJson([])).toBe("[]");
+  });
+
+  it("adds the comment id where there is one", () => {
+    const [a, b] = [finding({ line: 1 }), finding({ line: 2 })];
+    expect(JSON.parse(findingsJson([a, b], new Map([[b, 42]])))).toEqual([a, { ...b, commentId: 42 }]);
   });
 });

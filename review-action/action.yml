@@ -34,7 +34,7 @@ outputs:
   highest-severity:
     description: "Highest severity found, or `none`."
   findings-json:
-    description: "The findings as a JSON array (path, line, category, severity, title, body), most severe first, capped at 64 KB so it fits in an env var: long bodies are truncated and the least severe findings dropped first. Model output: validate before acting on it."
+    description: "The findings as a JSON array (path, line, category, severity, title, body, and commentId for findings posted as inline comments), most severe first, capped at 64 KB so it fits in an env var: long bodies are truncated and the least severe findings dropped first. Model output: validate before acting on it."
 
 runs:
   using: "node24"
