@@ -42,7 +42,7 @@ These checks only read state. Run them all, then report every problem together, 
 | Clean tree | `git status --porcelain` | Commit or stash. Untracked files count as changes. |
 | Spec committed on the base | `git fetch origin` then `git cat-file -e origin/main:specs/<file>` | Merge the spec's PR first. A spec that exists only on a branch is lost when you switch to `main`. |
 | Branch names are free | `git branch --list` and `git ls-remote --heads origin` for both `agent/<name>` and `spec/<name>` | Delete the branch, but only after the next check |
-| No PR for those branches | `gh pr list --head <branch> --state all` | If a PR exists (open or merged), ask first. It may be the live example the README links to. Rerunning means deleting its branch, or copying the spec under a new number. |
+| No PR for those branches | `gh pr list --head <branch> --state all` | If a PR exists (open or merged), ask first. It may be the live example the README links to. To rerun: copy the spec under a new number, or close the PR (with a comment saying it is superseded) and then rename or delete its branch. **Renaming a PR's head branch closes the PR**, and it can't be reopened until the name is restored, so never rename to "keep the PR open". |
 | `gh` signed in | `gh auth status` | `gh auth login` (the user runs it) |
 | Agent mode only: API key available | `[ -n "$ANTHROPIC_API_KEY" ] \|\| grep -q '^ANTHROPIC_API_KEY=.' .env`. Never print the key or the contents of `.env`. | The user adds it to an untracked `.env` at the repo root |
 | Agent mode only: Docker, for the sandbox | `docker info` | Start Docker Desktop, or use `--sandbox none` |
