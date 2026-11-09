@@ -64,24 +64,48 @@ export type FixReport = z.infer<typeof FixReportSchema>;
 
 /** Trailers on the agent's fix commits. The PR branch is the only state the cycle keeps between runs. */
 export const CYCLE_TRAILER = "Agent-Fix-Cycle";
-export const FINDINGS_TRAILER = "Agent-Fix-Findings";
+/** One per finding the cycle worked on, fixed or declined: "<category> <line> <path>". */
+export const ADDRESSED_TRAILER = "Agent-Fix-Addressed";
+
+/** Enough of a finding to recognize it in a later review, whose wording and line numbers drift. */
+export interface FindingKey {
+  category: string;
+  line: number;
+  path: string;
+}
 
 export interface CycleRecord {
   cycle: number;
-  /** Findings at or above the threshold that triggered that cycle. */
-  findings: number;
+  /** The findings that cycle worked on. Empty for commits from before this trailer existed. */
+  addressed: FindingKey[];
 }
 
+/** How far a finding's line may move between reviews and still count as the same finding. */
+export const LINE_TOLERANCE = 25;
+
 /**
- * Parses `git log --format=%x00%(trailers:key=Agent-Fix-Cycle,key=Agent-Fix-Findings,unfold)`.
+ * Same file, same category, roughly the same place. Titles are not compared: the reviewer
+ * rewords the same issue from one run to the next.
+ */
+export function sameFinding(key: FindingKey, finding: Finding): boolean {
+  return key.path === oneLine(finding.path) && key.category === trailerWord(finding.category) && Math.abs(key.line - finding.line) <= LINE_TOLERANCE;
+}
+
+const trailerWord = (text: string) => text.replace(/\s+/g, "-") || "-";
+
+/**
+ * Parses `git log --format=%x00%(trailers:key=Agent-Fix-Cycle,key=Agent-Fix-Addressed,unfold)`.
  * Commits without the cycle trailer (the agent's first commit, human merges) are skipped.
  */
 export function parseCycleHistory(logOutput: string): CycleRecord[] {
   const records: CycleRecord[] = [];
   for (const commit of logOutput.split("\0")) {
-    const value = (key: string) => new RegExp(`^${key}:\\s*(\\d+)\\s*$`, "m").exec(commit)?.[1];
-    const cycle = value(CYCLE_TRAILER);
-    if (cycle !== undefined) records.push({ cycle: Number(cycle), findings: Number(value(FINDINGS_TRAILER) ?? 0) });
+    const cycle = new RegExp(`^${CYCLE_TRAILER}:\\s*(\\d+)\\s*$`, "m").exec(commit)?.[1];
+    if (cycle === undefined) continue;
+    const addressed = [...commit.matchAll(new RegExp(`^${ADDRESSED_TRAILER}:\\s*(\\S+)\\s+(\\d+)\\s+(.+?)\\s*$`, "gm"))].map(
+      ([, category, line, path]) => ({ category: category!, line: Number(line), path: path! }),
+    );
+    records.push({ cycle: Number(cycle), addressed });
   }
   return records.sort((a, b) => a.cycle - b.cycle);
 }
@@ -93,8 +117,9 @@ export type FixDecision =
 
 /**
  * Whether to run another fix cycle. Findings below `minSeverity` are left for the human reviewer.
- * The cycle stops at `maxCycles`, and also when a cycle didn't reduce the number of actionable
- * findings, so the fixer and the reviewer can't trade the same issue back and forth.
+ * The cycle stops at `maxCycles`, and as soon as the review raises a finding an earlier cycle
+ * already worked on: the fixer and the reviewer disagree, and a human should settle it rather
+ * than let them trade the same issue back and forth. New findings alone keep the cycle going.
  */
 export function decideFix(
   history: CycleRecord[],
@@ -108,18 +133,18 @@ export function decideFix(
   if (history.length >= maxCycles) {
     return { action: "stop", reason: `Reached the limit of ${maxCycles} fix cycles.`, actionable, deferred };
   }
-  const last = history.at(-1);
-  if (last && actionable.length >= last.findings) {
-    return {
-      action: "stop",
-      reason:
-        `No progress: fix cycle ${last.cycle} addressed ${last.findings} finding(s) at ${minSeverity} or above, ` +
-        `and the review still reports ${actionable.length}.`,
-      actionable,
-      deferred,
-    };
+  for (const record of history) {
+    const repeat = actionable.find((f) => record.addressed.some((key) => sameFinding(key, f)));
+    if (repeat) {
+      return {
+        action: "stop",
+        reason: `The review raised a finding that fix cycle ${record.cycle} already worked on: ${oneLine(repeat.title)} (${where(repeat)}).`,
+        actionable,
+        deferred,
+      };
+    }
   }
-  return { action: "fix", cycle: (last?.cycle ?? 0) + 1, actionable, deferred };
+  return { action: "fix", cycle: (history.at(-1)?.cycle ?? 0) + 1, actionable, deferred };
 }
 
 const escapeXml = (text: string) => text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -140,10 +165,20 @@ export const FIX_PROMPT_FILE = fileURLToPath(new URL("../fix-prompt.md", import.
 /** The spec an agent branch was built from: agent/<slug> came from specs/<slug>.md. */
 export const specPathForBranch = (branch: string): string => `specs/${branch.replace(/^agent\//, "")}.md`;
 
-/** The fix task, from agent/fix-prompt.md. `specBody` is undefined if the spec can't be found. */
+/**
+ * The fix task, from agent/fix-prompt.md. `deferred` are the findings below the threshold: the agent
+ * doesn't fix them, but sees them so it doesn't write code or tests that lock in what they describe.
+ * `specBody` is undefined if the spec can't be found.
+ */
 export function fixTask(
   template: string,
-  { branch, findings, writableDirs, specBody }: { branch: string; findings: Finding[]; writableDirs: string[]; specBody: string | undefined },
+  {
+    branch,
+    findings,
+    deferred,
+    writableDirs,
+    specBody,
+  }: { branch: string; findings: Finding[]; deferred: Finding[]; writableDirs: string[]; specBody: string | undefined },
 ): AgentTask<FixReport> {
   const prompt = fillTemplate(template, {
     branch,
@@ -151,6 +186,7 @@ export function fixTask(
     specPath: specPathForBranch(branch),
     specBody: specBody ?? "(No spec file found for this branch. Work from the code and the findings.)",
     findings: renderFindingsForPrompt(findings),
+    deferred: deferred.length ? renderFindingsForPrompt(deferred) : "(none)",
   });
   return { prompt, schema: FixReportSchema };
 }
@@ -159,8 +195,9 @@ export async function loadFixTemplate(path: string = FIX_PROMPT_FILE): Promise<s
   return readFile(path, "utf8");
 }
 
-export function fixCommitMessage(cycle: number, actionable: number, report: FixReport): string {
-  return `Address AI review findings (fix cycle ${cycle})\n\n${report.summary}\n\n${CYCLE_TRAILER}: ${cycle}\n${FINDINGS_TRAILER}: ${actionable}\n`;
+export function fixCommitMessage(cycle: number, actionable: Finding[], report: FixReport): string {
+  const addressed = actionable.map((f) => `${ADDRESSED_TRAILER}: ${trailerWord(f.category)} ${f.line} ${oneLine(f.path)}`);
+  return `Address AI review findings (fix cycle ${cycle})\n\n${report.summary}\n\n${[`${CYCLE_TRAILER}: ${cycle}`, ...addressed].join("\n")}\n`;
 }
 
 /** Collapses model text to one line so it can't break the comment's list structure. */
@@ -236,8 +273,8 @@ export interface FixDeps extends GateDeps {
   minSeverity: Severity;
   maxCycles: number;
   model: string;
-  /** Runs the agent on the findings, on `branch` (whose name gives the spec it was built from). */
-  runAgent(findings: Finding[], branch: string): Promise<AgentRun<FixReport>>;
+  /** Runs the agent on the findings, with the deferred ones as context, on `branch` (whose name gives the spec). */
+  runAgent(findings: Finding[], deferred: Finding[], branch: string): Promise<AgentRun<FixReport>>;
 }
 
 export type FixResult =
@@ -288,7 +325,7 @@ export async function runFixCycle(deps: FixDeps): Promise<FixResult> {
   const { cycle, actionable, deferred } = decision;
   log(`Fix cycle ${cycle} of ${deps.maxCycles} on ${branch}: ${actionable.length} finding(s), ${deferred.length} left for the human.`);
   const gitStateBefore = await git.fingerprint();
-  const run = await deps.runAgent(actionable, branch);
+  const run = await deps.runAgent(actionable, deferred, branch);
   log(`Agent finished in ${run.turns} turns, $${run.costUsd.toFixed(2)}.`);
   // Before any other git command: the agent's run_checks calls ran its code, which could have
   // planted git config that a later command in this credentialed process would pick up.
@@ -306,7 +343,7 @@ export async function runFixCycle(deps: FixDeps): Promise<FixResult> {
   }
 
   const files = await verifyChanges(deps, branch, gitStateBefore);
-  const message = fixCommitMessage(cycle, actionable.length, run.report);
+  const message = fixCommitMessage(cycle, actionable, run.report);
   const body = fixComment(context, run, true);
   await scanForSecrets(deps, branch, [["the commit message", message], ["the PR comment", body]], files);
 

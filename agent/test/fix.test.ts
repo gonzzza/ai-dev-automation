@@ -4,6 +4,7 @@ import {
   decideFix,
   fixCommitMessage,
   fixTask,
+  LINE_TOLERANCE,
   loadFixTemplate,
   parseCycleHistory,
   parseFindings,
@@ -48,17 +49,31 @@ describe("parseFindings", () => {
 
 describe("parseCycleHistory", () => {
   it("reads the fix cycle trailers and skips commits without them", () => {
-    const log = "\0\0Agent-Fix-Cycle: 2\nAgent-Fix-Findings: 1\n\0Agent-Fix-Cycle: 1\nAgent-Fix-Findings: 3\n\0";
+    const log =
+      "\0\0Agent-Fix-Cycle: 2\nAgent-Fix-Addressed: bug 44 demo-app/src/a b.ts\n" +
+      "\0Agent-Fix-Cycle: 1\nAgent-Fix-Addressed: missing-tests 73 demo-app/test/a.test.ts\nAgent-Fix-Addressed: bug 10 x.ts\n\0";
     expect(parseCycleHistory(log)).toEqual([
-      { cycle: 1, findings: 3 },
-      { cycle: 2, findings: 1 },
+      {
+        cycle: 1,
+        addressed: [
+          { category: "missing-tests", line: 73, path: "demo-app/test/a.test.ts" },
+          { category: "bug", line: 10, path: "x.ts" },
+        ],
+      },
+      { cycle: 2, addressed: [{ category: "bug", line: 44, path: "demo-app/src/a b.ts" }] },
     ]);
     expect(parseCycleHistory("")).toEqual([]);
+  });
+
+  it("reads cycles from before the addressed trailer as having no known findings", () => {
+    // PR #5's first fix commit used an older, count-only trailer.
+    expect(parseCycleHistory("\0Agent-Fix-Cycle: 1\nAgent-Fix-Findings: 1\n")).toEqual([{ cycle: 1, addressed: [] }]);
   });
 });
 
 describe("decideFix", () => {
   const limits = { minSeverity: "medium" as const, maxCycles: 5 };
+  const clockBug = { category: "bug", line: 44, path: "demo-app/src/rate-limiter.ts" };
 
   it("fixes medium and above, and leaves low findings for the human", () => {
     const low = finding({ severity: "low", title: "Missing test" });
@@ -68,20 +83,37 @@ describe("decideFix", () => {
   });
 
   it("does nothing when only low findings remain", () => {
-    expect(decideFix([{ cycle: 1, findings: 2 }], [finding({ severity: "low" })], limits)).toMatchObject({ action: "none" });
+    expect(decideFix([{ cycle: 1, addressed: [] }], [finding({ severity: "low" })], limits)).toMatchObject({ action: "none" });
   });
 
   it("stops at the cycle limit", () => {
-    const history = [1, 2, 3, 4, 5].map((cycle) => ({ cycle, findings: 10 - cycle }));
+    const history = [1, 2, 3, 4, 5].map((cycle) => ({ cycle, addressed: [] }));
     expect(decideFix(history, [finding()], limits)).toMatchObject({ action: "stop", reason: "Reached the limit of 5 fix cycles." });
   });
 
-  it("continues while the count drops, and stops when a cycle made no progress", () => {
-    expect(decideFix([{ cycle: 1, findings: 2 }], [finding()], limits)).toMatchObject({ action: "fix", cycle: 2 });
-    expect(decideFix([{ cycle: 1, findings: 1 }], [finding()], limits)).toMatchObject({
+  it("keeps going when the review raises a new finding, even if the count stays the same", () => {
+    // What happened on PR #5: cycle 1 fixed a missing test, then the review rated the clock bug medium.
+    const history = [{ cycle: 1, addressed: [{ category: "missing-tests", line: 73, path: "demo-app/test/rate-limiter.test.ts" }] }];
+    expect(decideFix(history, [finding()], limits)).toMatchObject({ action: "fix", cycle: 2 });
+  });
+
+  it("stops when the review raises a finding an earlier cycle worked on, despite new wording and moved lines", () => {
+    const again = finding({ title: "Refill stalls after the clock steps back", line: 44 + 12 });
+    expect(decideFix([{ cycle: 1, addressed: [clockBug] }], [again], limits)).toMatchObject({
       action: "stop",
-      reason: expect.stringContaining("No progress: fix cycle 1 addressed 1 finding(s)"),
+      reason: expect.stringContaining("fix cycle 1 already worked on: Refill stalls after the clock steps back"),
     });
+  });
+
+  it("treats a different file, category or a distant line as a different finding", () => {
+    const history = [{ cycle: 1, addressed: [clockBug] }];
+    for (const other of [
+      finding({ path: "demo-app/src/retry.ts" }),
+      finding({ category: "performance" }),
+      finding({ line: 44 + LINE_TOLERANCE + 1 }),
+    ]) {
+      expect(decideFix(history, [other], limits)).toMatchObject({ action: "fix", cycle: 2 });
+    }
   });
 
   it("respects a higher threshold", () => {
@@ -97,24 +129,41 @@ describe("the fix prompt", () => {
     expect(rendered.match(/<\/finding>/g)).toHaveLength(1);
   });
 
-  it("fills every placeholder in fix-prompt.md", async () => {
+  it("fills every placeholder in fix-prompt.md, with the deferred findings as context", async () => {
     const task = fixTask(await loadFixTemplate(), {
       branch: "agent/001-rate-limiter",
       findings: [finding()],
+      deferred: [finding({ severity: "low", title: "Date.now is not monotonic" })],
       writableDirs: ["demo-app"],
       specBody: "# Spec body",
     });
     expect(task.prompt).not.toMatch(/\{\{\w+\}\}/);
     expect(task.prompt).toContain('<spec path="specs/001-rate-limiter.md">\n# Spec body');
     expect(task.prompt).toContain('<finding id="1" severity="medium"');
+    expect(task.prompt).toMatch(/<deferred-findings [^>]*>\n<finding id="1" severity="low"[^>]*>\nDate\.now is not monotonic/);
+    expect(task.prompt).toContain("don't write code or tests that lock in behavior they describe as a bug");
+  });
+
+  it("says so when nothing was deferred", async () => {
+    const task = fixTask(await loadFixTemplate(), { branch: "agent/x", findings: [finding()], deferred: [], writableDirs: ["demo-app"], specBody: undefined });
+    expect(task.prompt).toMatch(/<deferred-findings [^>]*>\n\(none\)\n<\/deferred-findings>/);
   });
 });
 
 describe("fixCommitMessage", () => {
-  it("ends with the trailers the next cycle reads back", () => {
-    const message = fixCommitMessage(2, 1, report());
+  it("ends with the trailers the next cycle reads back, one per finding worked on", () => {
+    const findings = [finding(), finding({ category: "missing tests", line: 73, path: "demo-app/test/rate-limiter.test.ts" })];
+    const message = fixCommitMessage(2, findings, report());
     expect(message).toMatch(/^Address AI review findings \(fix cycle 2\)\n\n/);
-    expect(parseCycleHistory(`\0${message}`)).toEqual([{ cycle: 2, findings: 1 }]);
+    expect(parseCycleHistory(`\0${message}`)).toEqual([
+      {
+        cycle: 2,
+        addressed: [
+          { category: "bug", line: 44, path: "demo-app/src/rate-limiter.ts" },
+          { category: "missing-tests", line: 73, path: "demo-app/test/rate-limiter.test.ts" }, // spaces can't split the key
+        ],
+      },
+    ]);
   });
 });
 
@@ -184,12 +233,12 @@ describe("runFixCycle", () => {
     const result = await runFixCycle(deps);
 
     expect(result).toMatchObject({ status: "fixed", cycle: 1 });
-    expect(deps.runAgent).toHaveBeenCalledWith([finding()], "agent/001-rate-limiter"); // the low one is not passed
+    expect(deps.runAgent).toHaveBeenCalledWith([finding()], [expect.objectContaining({ severity: "low" })], "agent/001-rate-limiter"); // the low one only as context
     expect(git.cycleTrailers).toHaveBeenCalledWith("origin/main..HEAD");
     expect(deps.runChecks).toHaveBeenCalledOnce();
     const [files, message] = git.commit.mock.calls[0]!;
     expect(files).toEqual(["demo-app/src/rate-limiter.ts"]);
-    expect(message).toContain("Agent-Fix-Cycle: 1\nAgent-Fix-Findings: 1");
+    expect(message).toContain("Agent-Fix-Cycle: 1\nAgent-Fix-Addressed: bug 44 demo-app/src/rate-limiter.ts");
     expect(git.push).toHaveBeenCalledWith("agent/001-rate-limiter");
 
     const comment = git.commentOnPullRequest.mock.calls[0]![1];

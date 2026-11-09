@@ -4,6 +4,7 @@ Work like this:
 1. Read CLAUDE.md, the spec, and the code each finding points to.
 2. Decide for each finding whether it is real. The reviewer is another model and can be wrong. If a finding is real, fix it and add or adjust a test that would have caught it. If it is wrong, not worth the change, or asks for something the spec rules out, decline it and say why.
 3. Keep the change to what the findings need. Don't refactor or add features beyond them.
+   The lower-severity findings at the end are not yours to fix: a human will review them. Read them anyway, and don't write code or tests that lock in behavior they describe as a bug. If a test you add touches one, leave that case out and mention it in the outcome's explanation.
 4. Call the run_checks tool. If it fails, fix the problem and call it again, until it passes.
 5. Report one outcome per finding, by id.
 
@@ -20,3 +21,7 @@ Rules:
 <findings>
 {{findings}}
 </findings>
+
+<deferred-findings note="Context only. Do not fix these or report outcomes for them.">
+{{deferred}}
+</deferred-findings>
