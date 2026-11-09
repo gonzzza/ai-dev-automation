@@ -137,13 +137,14 @@ function setup({
   changed = ["demo-app/src/rate-limiter.ts"],
   agentReport = report(),
   reviewedSha = "abc123" as string | undefined,
+  tamperGit = false,
 } = {}) {
   let ran = false;
   const git = {
     currentBranch: vi.fn(async () => branch),
     changedFiles: vi.fn(async () => (ran ? changed : [])),
     headSha: vi.fn(async () => head),
-    fingerprint: vi.fn(async () => "same"),
+    fingerprint: vi.fn(async () => (tamperGit && ran ? "changed" : "same")),
     commit: vi.fn(async (_files: string[], _message: string) => {}),
     push: vi.fn(async () => ""),
     pullRequest: vi.fn(async () => ({
@@ -249,6 +250,13 @@ describe("runFixCycle", () => {
     expect(await runFixCycle(deps)).toMatchObject({ status: "declined" });
     expect(git.commit).not.toHaveBeenCalled();
     expect(git.commentOnPullRequest).toHaveBeenCalledOnce();
+  });
+
+  it("checks the git state before any other git command, even when the agent changed no files", async () => {
+    const { deps, git } = setup({ changed: [], tamperGit: true });
+    await expect(runFixCycle(deps)).rejects.toThrow("git state");
+    expect(git.changedFiles).toHaveBeenCalledOnce(); // the preflight call only, none after the run
+    expect(git.commentOnPullRequest).not.toHaveBeenCalled();
   });
 
   it("applies the same gates as a new PR: scope, and secrets in what gets posted", async () => {

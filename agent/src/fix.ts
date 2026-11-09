@@ -290,6 +290,11 @@ export async function runFixCycle(deps: FixDeps): Promise<FixResult> {
   const gitStateBefore = await git.fingerprint();
   const run = await deps.runAgent(actionable, branch);
   log(`Agent finished in ${run.turns} turns, $${run.costUsd.toFixed(2)}.`);
+  // Before any other git command: the agent's run_checks calls ran its code, which could have
+  // planted git config that a later command in this credentialed process would pick up.
+  if ((await git.fingerprint()) !== gitStateBefore) {
+    throw new Error(`The git state (HEAD, branch, .git/config or hooks) changed during the run. Nothing was committed; inspect ${branch}.`);
+  }
   const context = { cycle, maxCycles: deps.maxCycles, actionable, deferred, model: deps.model };
 
   // No changes is a valid outcome, whether the agent declined every finding or found the code already
