@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createRateLimiter, type RateLimiterOptions } from "../src/rate-limiter.js";
 
 /** A fake clock whose `sleep` advances time instantly and records each wait. */
@@ -156,10 +156,17 @@ describe("createRateLimiter", () => {
   it("AC7: a long acquire completes instantly with the injected clock and sleep", async () => {
     const { rl, time } = limiter(1, 1 / 3600); // one token per hour
     rl.tryRemove();
-    const started = performance.now();
-    await rl.acquire();
-    expect(time.state.sleeps.reduce((a, b) => a + b, 0)).toBeCloseTo(3_600_000);
-    expect(performance.now() - started).toBeLessThan(100);
+    const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
+    try {
+      await rl.acquire();
+      expect(setTimeoutSpy).not.toHaveBeenCalled();
+    } finally {
+      setTimeoutSpy.mockRestore();
+    }
+    expect(time.state.sleeps).toHaveLength(1);
+    expect(time.state.sleeps[0]).toBeCloseTo(3_600_000);
+    expect(time.state.t).toBeCloseTo(3_600_000);
+    expect(rl.available()).toBeCloseTo(0);
   });
 
   it("AC8: README documents the limiter with an example", () => {
