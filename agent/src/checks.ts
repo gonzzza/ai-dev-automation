@@ -1,4 +1,5 @@
 import { createSdkMcpServer, tool } from "@anthropic-ai/claude-agent-sdk";
+import { randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { tail, type Exec } from "./exec.js";
 
@@ -26,10 +27,19 @@ export type Sandbox = { kind: "none" } | { kind: "docker"; image: string; uid?: 
  * - no capabilities, no privilege escalation, and caps on processes and memory.
  * - the host user's uid/gid on Linux, so files the tests create aren't owned by root.
  */
-export function sandboxArgs(repoRoot: string, command: string[], { image, uid, gid }: Omit<Extract<Sandbox, { kind: "docker" }>, "kind">): string[] {
+export function sandboxArgs(
+  repoRoot: string,
+  command: string[],
+  { image, uid, gid }: Omit<Extract<Sandbox, { kind: "docker" }>, "kind">,
+  name?: string,
+): string[] {
   return [
     "run",
     "--rm",
+    // A name, so the harness can remove the container itself: killing the docker client on a
+    // timeout doesn't stop it. --init forwards signals and reaps children the tests leave behind.
+    ...(name ? [`--name=${name}`] : []),
+    "--init",
     "--network=none",
     "--cap-drop=ALL",
     "--security-opt=no-new-privileges",
@@ -56,11 +66,20 @@ export function sandboxArgs(repoRoot: string, command: string[], { image, uid, g
  */
 export async function runChecks(exec: Exec, repoRoot: string, env?: NodeJS.ProcessEnv, sandbox: Sandbox = { kind: "none" }): Promise<CheckResult> {
   const command = ["npm", "run", "check"];
-  const result =
-    sandbox.kind === "docker"
-      ? await exec("docker", sandboxArgs(repoRoot, command, sandbox), { cwd: repoRoot, env })
-      : await exec(command[0]!, command.slice(1), { cwd: repoRoot, env });
-  return { passed: result.code === 0, output: tail(`${result.stdout}\n${result.stderr}`.trim(), 20_000) };
+  if (sandbox.kind === "none") {
+    const result = await exec(command[0]!, command.slice(1), { cwd: repoRoot, env });
+    return { passed: result.code === 0, output: tail(`${result.stdout}\n${result.stderr}`.trim(), 20_000) };
+  }
+  const name = `agent-checks-${randomBytes(6).toString("hex")}`;
+  try {
+    const result = await exec("docker", sandboxArgs(repoRoot, command, sandbox, name), { cwd: repoRoot, env });
+    return { passed: result.code === 0, output: tail(`${result.stdout}\n${result.stderr}`.trim(), 20_000) };
+  } finally {
+    // Always, and before anything inspects the tree: after a timeout the container would otherwise
+    // keep running, with the repo mounted, while the gates check and commit it. After a normal exit
+    // --rm has already removed it, and this is a harmless no-op.
+    await exec("docker", ["rm", "--force", name], { env });
+  }
 }
 
 /** Fails fast, before the agent runs, if the docker sandbox was asked for but can't be used. */

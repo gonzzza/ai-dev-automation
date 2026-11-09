@@ -13,7 +13,7 @@ describe("sandboxArgs", () => {
   const args = sandboxArgs("/repo", ["npm", "run", "check"], docker);
 
   it("cuts the network, drops privileges and caps resources", () => {
-    expect(args).toEqual(expect.arrayContaining(["run", "--rm", "--network=none", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--pids-limit=512"]));
+    expect(args).toEqual(expect.arrayContaining(["run", "--rm", "--init", "--network=none", "--cap-drop=ALL", "--security-opt=no-new-privileges", "--pids-limit=512"]));
   });
 
   it("mounts only the repo, with .git read-only, and runs as the host user", () => {
@@ -43,9 +43,33 @@ describe("runChecks", () => {
     expect(ok).toHaveBeenLastCalledWith("npm", ["run", "check"], { cwd: "/repo", env: { PATH: "/bin" } });
   });
 
-  it("runs the same command inside the container with the docker sandbox", async () => {
-    await runChecks(ok, "/repo", { PATH: "/bin" }, docker);
-    expect(ok).toHaveBeenLastCalledWith("docker", sandboxArgs("/repo", ["npm", "run", "check"], docker), { cwd: "/repo", env: { PATH: "/bin" } });
+  it("runs the same command inside a uniquely named container, then removes that container", async () => {
+    const calls: string[][] = [];
+    const fake: Exec = async (_cmd, args) => (calls.push(args), { code: 0, stdout: "all good", stderr: "" });
+    expect(await runChecks(fake, "/repo", { PATH: "/bin" }, docker)).toEqual({ passed: true, output: "all good" });
+
+    const name = calls[0]!.find((a) => a.startsWith("--name="))!.slice("--name=".length);
+    expect(name).toMatch(/^agent-checks-[0-9a-f]{12}$/);
+    expect(calls[0]).toEqual(sandboxArgs("/repo", ["npm", "run", "check"], docker, name));
+    expect(calls[1]).toEqual(["rm", "--force", name]);
+  });
+
+  it("removes the container even when the client was killed on a timeout, before returning", async () => {
+    const calls: string[][] = [];
+    const timedOut: Exec = async (_cmd, args) => (calls.push(args), args[0] === "run" ? { code: 1, stdout: "", stderr: "killed: timeout" } : { code: 0, stdout: "", stderr: "" });
+    expect(await runChecks(timedOut, "/repo", {}, docker)).toMatchObject({ passed: false });
+    expect(calls.map((a) => a[0])).toEqual(["run", "rm"]);
+  });
+
+  it("gives every run its own container name", async () => {
+    const names = new Set<string>();
+    const fake: Exec = async (_cmd, args) => {
+      const n = args.find((a) => a.startsWith("--name="));
+      if (n) names.add(n);
+      return { code: 0, stdout: "", stderr: "" };
+    };
+    for (let i = 0; i < 3; i++) await runChecks(fake, "/repo", {}, docker);
+    expect(names.size).toBe(3);
   });
 });
 
