@@ -1,0 +1,38 @@
+version: 2
+updates:
+  # The workflows' actions are pinned to full commit SHAs with the version in a comment
+  # (`@<sha> # v7.0.1`). Dependabot updates both, so pins don't go stale.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    # Wait a week after a release before proposing it: a compromised release is usually caught and
+    # pulled within days.
+    cooldown:
+      default-days: 7
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # One root lockfile covers every workspace. A bump that changes what review-action bundles fails
+  # CI's stale-dist check until a person rebuilds dist/ on the branch: CLAUDE.md says how. That's
+  # deliberate. Rebuilding automatically would run a new dependency's install scripts with a write
+  # token.
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    cooldown:
+      default-days: 7
+      semver-major-days: 14
+    open-pull-requests-limit: 5
+    groups:
+      # Minor and patch updates in one PR per type; majors come one by one, since they can break.
+      development:
+        dependency-type: development
+        update-types: [minor, patch]
+      production:
+        dependency-type: production
+        update-types: [minor, patch]
