@@ -53,7 +53,6 @@ export function checksEnv(env: NodeJS.ProcessEnv, emptyDir: string): NodeJS.Proc
   };
 }
 
-/** Names of the secrets found in `text`: known values from the environment, or well-known credential formats. */
 /**
  * Replaces credential values from the environment, and anything matching a known credential format,
  * with "[REDACTED]". For logs that leave the machine; it never throws, unlike the commit gate.
@@ -66,6 +65,7 @@ export function redactSecrets(text: string, knownValues: string[]): string {
   return out;
 }
 
+/** Names of the secrets found in `text`: known values from the environment, or well-known credential formats. */
 export function findSecrets(text: string, knownValues: string[]): string[] {
   const found = knownValues.some((value) => text.includes(value)) ? ["a credential from the environment"] : [];
   for (const [name, pattern] of SECRET_PATTERNS) if (pattern.test(text)) found.push(name);
