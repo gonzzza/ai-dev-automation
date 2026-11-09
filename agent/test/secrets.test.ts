@@ -67,3 +67,18 @@ describe("scopeDir", () => {
     expect(() => scopeDir(root, root, "../elsewhere")).toThrow("outside the repository");
   });
 });
+
+describe("checksEnv git isolation", () => {
+  it("cuts git off from global config, credential helpers and ssh, so test code can't push", () => {
+    const result = checksEnv({ PATH: "/usr/bin" }, "/tmp/empty");
+    expect(result).toMatchObject({
+      GIT_CONFIG_NOSYSTEM: "1",
+      GIT_CONFIG_COUNT: "2",
+      GIT_CONFIG_KEY_0: "credential.helper",
+      GIT_CONFIG_VALUE_0: "",
+      GIT_CONFIG_KEY_1: "core.sshCommand",
+      GIT_CONFIG_VALUE_1: "false",
+    });
+    expect(result.GIT_CONFIG_GLOBAL).toMatch(/^(NUL|\/dev\/null)$/);
+  });
+});

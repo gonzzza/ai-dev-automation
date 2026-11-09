@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { existsSync } from "node:fs";
-import { mkdtemp, readFile } from "node:fs/promises";
+import { lstat, mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { relative, resolve } from "node:path";
 import { parseArgs, parseEnv } from "node:util";
@@ -82,6 +82,7 @@ async function main(): Promise<void> {
     runAgent: (s) => runAgent(s, config, exec),
     runChecks: () => runChecks(exec, repoRoot, config.checksEnv),
     readFile: (path) => (existsSync(resolve(repoRoot, path)) ? readFile(resolve(repoRoot, path), "utf8") : Promise.resolve(undefined)),
+    isSymlink: (path) => lstat(resolve(repoRoot, path)).then((s) => s.isSymbolicLink(), () => false),
     secrets: secretValues(process.env),
     log: console.log,
   });

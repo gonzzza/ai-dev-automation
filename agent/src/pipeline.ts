@@ -30,6 +30,8 @@ export interface PipelineDeps {
   runChecks(): Promise<CheckResult>;
   /** Reads a repo-relative file for the secret scan; undefined if it was deleted. */
   readFile(path: string): Promise<string | undefined>;
+  /** Whether a repo-relative path is a symlink (not followed). */
+  isSymlink(path: string): Promise<boolean>;
   /** Credential values from the environment that must never be committed. */
   secrets: string[];
   log(line: string): void;
@@ -84,6 +86,11 @@ export async function runPipeline(deps: PipelineDeps): Promise<PipelineResult> {
   if (outside.length) {
     throw new Error(`The agent changed files outside ${writableDirs.join(", ")} or protected config files:\n${outside.join("\n")}`);
   }
+  // Git commits a symlink as its target path, which the secret scan below would not see, and the
+  // link could point outside the repo. Specs here never need one.
+  const links = [];
+  for (const file of files) if (await deps.isSymlink(file)) links.push(file);
+  if (links.length) throw new Error(`The run created symlinks, which are not allowed:\n${links.join("\n")}`);
 
   const body = prBody({ spec, run, files, model: deps.model, base, repoUrl: await git.repoUrl() });
 

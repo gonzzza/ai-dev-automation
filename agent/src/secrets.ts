@@ -37,7 +37,20 @@ const CHECKS_ENV_ALLOWED = /^(PATH|PATHEXT|HOME|USERPROFILE|HOMEDRIVE|HOMEPATH|A
  */
 export function checksEnv(env: NodeJS.ProcessEnv, emptyDir: string): NodeJS.ProcessEnv {
   const allowed = Object.entries(env).filter(([name]) => CHECKS_ENV_ALLOWED.test(name) && !SECRET_NAME.test(name));
-  return { ...Object.fromEntries(allowed), GH_CONFIG_DIR: emptyDir, GIT_TERMINAL_PROMPT: "0" };
+  return {
+    ...Object.fromEntries(allowed),
+    GH_CONFIG_DIR: emptyDir,
+    GIT_TERMINAL_PROMPT: "0",
+    // git run by test code must not reach your global config, credential helpers or SSH keys,
+    // or it could push with your credentials.
+    GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_CONFIG_COUNT: "2",
+    GIT_CONFIG_KEY_0: "credential.helper",
+    GIT_CONFIG_VALUE_0: "",
+    GIT_CONFIG_KEY_1: "core.sshCommand",
+    GIT_CONFIG_VALUE_1: "false",
+  };
 }
 
 /** Names of the secrets found in `text`: known values from the environment, or well-known credential formats. */

@@ -30,6 +30,7 @@ function setup({
   dryRun = false,
   contents = {} as Record<string, string | undefined>,
   tamperGit = false,
+  symlinks = [] as string[],
 } = {}) {
   let created = false;
   let ran = false;
@@ -54,6 +55,7 @@ function setup({
     runAgent: vi.fn(async () => ((ran = true), agentRun)),
     runChecks: vi.fn(async () => ({ passed: checksPassed, output: checksPassed ? "ok" : "1 test failed" })),
     readFile: vi.fn(async (path: string) => (path in contents ? contents[path] : "export {};")),
+    isSymlink: vi.fn(async (path: string) => symlinks.includes(path)),
     secrets: ["sk-test-value-from-the-env"],
     log: () => {},
   };
@@ -114,6 +116,12 @@ describe("runPipeline", () => {
     const { deps, git } = setup({ tamperGit: true });
     await expect(runPipeline(deps)).rejects.toThrow("The git state (HEAD, branch, .git/config or hooks) changed during the run");
     expect(git.changedFiles).toHaveBeenCalledTimes(1); // only the preflight, before the agent ran
+    expect(git.commit).not.toHaveBeenCalled();
+  });
+
+  it("rejects symlinks, whose committed target path the secret scan would not see", async () => {
+    const { deps, git } = setup({ changed: ["demo-app/src/a.ts", "demo-app/x"], symlinks: ["demo-app/x"], contents: { "demo-app/x": undefined } });
+    await expect(runPipeline(deps)).rejects.toThrow("The run created symlinks, which are not allowed:\ndemo-app/x");
     expect(git.commit).not.toHaveBeenCalled();
   });
 
