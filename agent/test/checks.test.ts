@@ -1,4 +1,5 @@
 import { execFileSync } from "node:child_process";
+import { execFileSync as run } from "node:child_process";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -162,12 +163,14 @@ describe("the dependency volume", () => {
     const fresh: Exec = async (_cmd, args) => (calls.push(args), { code: args.includes("test") ? 1 : 0, stdout: "", stderr: "" });
     const prepared = await prepareSandbox(fresh, "/repo", docker, { log: () => {}, readLockfile: async () => "lock" });
     expect(prepared).toEqual({ ...docker, depsVolume: depsVolumeName("lock", docker.image) });
-    expect(calls.map((a) => a.slice(0, 2).join(" "))).toEqual(["run --rm", "volume create", "run --rm"]);
+    // Created (labeled) before anything mounts it, then probed, then installed into.
+    expect(calls.map((a) => a.slice(0, 2).join(" "))).toEqual(["volume create", "run --rm", "run --rm"]);
+    expect(calls[0]).toContain("--label=ai-dev-automation.deps");
 
     const again: string[][] = [];
     const ready: Exec = async (_cmd, args) => (again.push(args), { code: 0, stdout: "", stderr: "" });
     await prepareSandbox(ready, "/repo", docker, { log: () => {}, readLockfile: async () => "lock" });
-    expect(again).toHaveLength(1); // just the check for the marker
+    expect(again.map((a) => a[0])).toEqual(["volume", "run"]); // create (a no-op) and the marker check, no install
   });
 
   it("fails the run before the agent starts if the install fails", async () => {
@@ -179,5 +182,59 @@ describe("the dependency volume", () => {
     const never: Exec = vi.fn();
     expect(await prepareSandbox(never, "/repo", { kind: "none" }, { log: () => {}, readLockfile: async () => "" })).toEqual({ kind: "none" });
     expect(never).not.toHaveBeenCalled();
+  });
+});
+
+describe.runIf(dockerAvailable)("the dependency volume, for real", () => {
+  let dir: string;
+  let volume: string | undefined;
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+    if (volume) run("docker", ["volume", "rm", "--force", volume], { stdio: "ignore" });
+  });
+
+  it("installs a workspace project into a labeled volume that the sandbox can use but not change", { timeout: 300_000 }, async () => {
+    // A tiny npm workspace with no registry packages, so the install needs no network: the root
+    // depends on its workspace "pkg", which npm ci links into node_modules.
+    dir = mkdtempSync(join(tmpdir(), "sandbox-deps-"));
+    const name = `t${Date.now()}`; // a lockfile of its own, so a volume of its own
+    mkdirSync(join(dir, ".git"));
+    mkdirSync(join(dir, "pkg"));
+    writeFileSync(join(dir, "package.json"), JSON.stringify({ name, version: "1.0.0", private: true, workspaces: ["pkg"] }));
+    writeFileSync(join(dir, "pkg", "package.json"), JSON.stringify({ name: "pkg", version: "1.0.0", main: "index.js" }));
+    writeFileSync(join(dir, "pkg", "index.js"), "module.exports = 42;\n");
+    const lockfile = JSON.stringify({
+      name,
+      version: "1.0.0",
+      lockfileVersion: 3,
+      requires: true,
+      packages: {
+        "": { name, version: "1.0.0", workspaces: ["pkg"] },
+        "node_modules/pkg": { resolved: "pkg", link: true },
+        pkg: { version: "1.0.0" },
+      },
+    });
+    writeFileSync(join(dir, "package-lock.json"), lockfile);
+
+    const base = { kind: "docker" as const, image: DEFAULT_SANDBOX_IMAGE, uid: process.getuid?.(), gid: process.getgid?.() };
+    const prepared = await prepareSandbox(exec, dir, base, { log: () => {}, readLockfile: async () => lockfile });
+    volume = prepared.kind === "docker" ? prepared.depsVolume : undefined;
+    expect(volume).toBe(depsVolumeName(lockfile, DEFAULT_SANDBOX_IMAGE));
+
+    const labels = run("docker", ["volume", "inspect", "--format", "{{json .Labels}}", volume!], { encoding: "utf8" });
+    expect(JSON.parse(labels)).toHaveProperty("ai-dev-automation.deps");
+
+    const probe = `
+      const fs = require("fs");
+      const out = { pkg: require("pkg") };
+      try { fs.writeFileSync("/work/node_modules/planted.js", "x"); out.depsWrite = "ok"; } catch (e) { out.depsWrite = e.code; }
+      fs.writeFileSync("/tmp/helper.sh", "#!/bin/sh\\necho ran");
+      fs.chmodSync("/tmp/helper.sh", 0o755);
+      out.tmpExec = require("child_process").execFileSync("/tmp/helper.sh", { encoding: "utf8" }).trim();
+      console.log(JSON.stringify(out));
+    `;
+    const result = await exec("docker", sandboxArgs(dir, ["node", "-e", probe], prepared.kind === "docker" ? prepared : base), { cwd: dir, timeoutMs: 120_000 });
+    expect(result.code, result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout.trim().split("\n").at(-1)!)).toEqual({ pkg: 42, depsWrite: "EROFS", tmpExec: "ran" });
   });
 });

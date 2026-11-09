@@ -62,6 +62,7 @@ export function installArgs(repoRoot: string, volume: string, { image, uid, gid 
     // Workspaces need their package.json too, at the same relative paths.
     `for ws in $(node -p 'require("/src/package.json").workspaces?.join(" ") ?? ""'); do mkdir -p "$ws" && cp "/src/$ws/package.json" "$ws/"; done`,
     "npm ci --no-audit --no-fund",
+    "mkdir -p node_modules",
     "find /deps -mindepth 1 -delete",
     `cp -a node_modules/. /deps/${owner}`,
     `touch /deps/${INSTALLED_MARKER}`,
@@ -75,7 +76,7 @@ export function installArgs(repoRoot: string, volume: string, { image, uid, gid 
     "--cap-add=FOWNER",
     "--security-opt=no-new-privileges",
     // exec: packages are built here, and install scripts such as esbuild's run their own binary.
-    "--tmpfs=/tmp:exec",
+    "--tmpfs=/tmp:exec,nosuid,nodev",
     "--env=HOME=/tmp",
     "--env=npm_config_cache=/tmp/.npm",
     "--env=npm_config_update_notifier=false",
@@ -100,10 +101,13 @@ export async function prepareSandbox(
 ): Promise<Sandbox> {
   if (sandbox.kind !== "docker") return sandbox;
   const volume = depsVolumeName(await readLockfile(), sandbox.image);
+  // Create it first, labeled: mounting a missing volume would auto-create it without the label,
+  // and the documented prune filter would never match it. Creating an existing volume is a no-op.
+  const created = await exec("docker", ["volume", "create", `--label=${DEPS_VOLUME_LABEL}`, volume], { env });
+  if (created.code !== 0) throw new Error(`--sandbox docker: could not create volume ${volume}: ${(created.stderr || created.stdout).trim()}`);
   const ready = await exec("docker", ["run", "--rm", "--network=none", `--volume=${volume}:/deps:ro`, sandbox.image, "test", "-f", `/deps/${INSTALLED_MARKER}`], { env });
   if (ready.code !== 0) {
     log(`Installing dependencies for the sandbox into Docker volume ${volume} (once per lockfile)...`);
-    await exec("docker", ["volume", "create", `--label=${DEPS_VOLUME_LABEL}`, volume], { env });
     const install = await exec("docker", installArgs(repoRoot, volume, sandbox), { env, timeoutMs: 15 * 60_000 });
     if (install.code !== 0) {
       throw new Error(`--sandbox docker: installing dependencies failed:\n${tail(`${install.stdout}\n${install.stderr}`.trim(), 4_000)}`);
@@ -135,7 +139,9 @@ export function sandboxArgs(repoRoot: string, command: string[], { image, uid, g
     "--pids-limit=512",
     "--memory=4g",
     ...(uid !== undefined && gid !== undefined ? ["--user", `${uid}:${gid}`] : []),
-    "--tmpfs=/tmp",
+    // exec, like /tmp on the host and in CI: a test that writes a helper script to os.tmpdir() and
+    // runs it must not fail only in the sandbox, or the agent chases a failure that isn't real.
+    "--tmpfs=/tmp:exec,nosuid,nodev",
     "--env=HOME=/tmp",
     "--env=CI=1",
     "--env=npm_config_cache=/tmp/.npm",
