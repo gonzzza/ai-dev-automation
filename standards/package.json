@@ -1,0 +1,17 @@
+{
+  "name": "standards",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Parses and selects org engineering standards for the review action and the agent.",
+  "type": "module",
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "default": "./src/index.ts"
+    }
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  }
+}
