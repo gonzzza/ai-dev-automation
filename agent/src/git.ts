@@ -6,7 +6,8 @@ import { run, type Exec } from "./exec.js";
 
 /**
  * Parses `git status --porcelain=v1 -z`: NUL-separated "XY path" entries, no quoting.
- * A rename or copy is followed by an extra entry holding the original path, which is skipped.
+ * A rename or copy is followed by an extra entry holding the original path. Both paths are
+ * returned: a rename deletes its source, so the source has to pass the scope gate too.
  */
 export function parsePorcelainZ(output: string): string[] {
   const entries = output.split("\0");
@@ -15,7 +16,7 @@ export function parsePorcelainZ(output: string): string[] {
     const entry = entries[i]!;
     if (entry.length < 4) continue;
     paths.push(entry.slice(3));
-    if (entry[0] === "R" || entry[0] === "C") i++;
+    if (/[RC]/.test(entry.slice(0, 2)) && entries[i + 1]) paths.push(entries[++i]!);
   }
   return paths;
 }
@@ -78,17 +79,20 @@ export class Git {
   async branchExists(name: string): Promise<boolean> {
     const local = await this.exec("git", [...Git.SAFE, "rev-parse", "--verify", "--quiet", `refs/heads/${name}`], { cwd: this.cwd });
     if (local.code === 0) return true;
-    // Exit 2 means no matching branch; any other failure (no origin, offline) surfaces later at push.
-    const remote = await this.exec("git", [...Git.SAFE, "ls-remote", "--exit-code", "--heads", "origin", name], { cwd: this.cwd });
-    return remote.code === 0;
+    // ls-remote matches ref name suffixes, so compare exactly. A failure (no origin, offline) surfaces later at push.
+    const ref = `refs/heads/${name}`;
+    const remote = await this.exec("git", [...Git.SAFE, "ls-remote", "--heads", "origin", ref], { cwd: this.cwd });
+    return remote.code === 0 && remote.stdout.split("\n").some((line) => line.split("\t")[1] === ref);
   }
 
   createBranch(name: string) {
     return this.git("switch", "-c", name);
   }
 
+  /** Commits exactly `files`: the index is reset first, so nothing staged during the run rides along. */
   async commit(files: string[], message: string): Promise<void> {
-    await this.git("add", "--", ...files);
+    await this.git("reset", "-q");
+    await this.git("add", "-A", "--", ...files);
     await withTempFile(message, (path) => this.git("commit", "--no-verify", "-F", path));
   }
 

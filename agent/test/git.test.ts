@@ -9,8 +9,12 @@ describe("parsePorcelainZ", () => {
     ]);
   });
 
-  it("returns the new path of a rename and skips the original", () => {
-    expect(parsePorcelainZ("R  demo-app/b.ts\0demo-app/a.ts\0 M demo-app/c.ts\0")).toEqual(["demo-app/b.ts", "demo-app/c.ts"]);
+  it("returns both paths of a rename, since the source is deleted and must pass the scope gate too", () => {
+    expect(parsePorcelainZ("R  demo-app/x.yml\0.github/workflows/ci.yml\0 M demo-app/c.ts\0")).toEqual([
+      "demo-app/x.yml",
+      ".github/workflows/ci.yml",
+      "demo-app/c.ts",
+    ]);
   });
 
   it("handles spaces in paths and empty output", () => {
