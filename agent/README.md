@@ -94,7 +94,9 @@ From any line on `main`, `git log` leads to the run that wrote it, and from ther
 
 | Event | Contains |
 |-------|----------|
-| `run.start` | Mode, spec or PR, the commit it started from, model, effort, turn and budget limits, Node version |
+| `run.start` | Mode, command-line arguments, Node version, and the CI run link when in Actions. Written first, before anything can fail. |
+| `run.config` | The commit it started from, model, effort, writable directories, turn and budget limits |
+| `spec.input` / `fix.input` | The spec (path, base branch, body), or the PR number, reviewed commit, threshold, cycle limit and findings |
 | `agent.start` | The full prompt sent to the model |
 | `sdk.message` | Every message of the session: the model's turns, tool calls and tool results. This is the transcript. |
 | `policy.decision` | Every tool call the permission policy saw, allowed or denied, with the reason for each denial |
@@ -104,7 +106,8 @@ From any line on `main`, `git log` leads to the run that wrote it, and from ther
 | `run.end` | Always written, even on failure. `ok`, duration and the outcome, or the error and a `category`: `config`, `bad-input`, `preflight`, `agent-stopped`, `bad-report`, `checks-failed`, `git-state-changed`, `out-of-scope`, `secret-found` or `no-changes` |
 
 - **Redaction.** Every line is redacted before it's written: credential values from the environment, and anything matching a known key format, become `[REDACTED]`.
-- **Location.** The log lives outside the repository, where the agent's tools can't read it.
+- **Location.** The log lives outside the repository, so the agent's own tools can't reach it. It's created owner-only (`0700` directory, `0600` file).
+- **It is a record, not tamper-proof evidence.** Tests the agent writes run as the same OS user as the harness, so test code could find the log and edit or truncate it, including the denials it records. For an audit trail that has to hold up against that, send events to an external store as they happen (the OpenTelemetry export below does that for Claude Code's own events), or run the checks in a separate job or sandbox that can't see the log. That separate-job change is the next planned step.
 - **Crash safety.** Lines are appended as they happen, so a crashed run still leaves everything up to the crash.
 - **In CI**, the fix job uploads the log as an artifact (`agent-run-<run id>-<attempt>`, kept for 30 days) even when the run fails.
 
