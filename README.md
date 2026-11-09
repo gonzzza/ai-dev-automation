@@ -16,9 +16,18 @@ flowchart LR
 
 AI coding agents are fast, but unattended they are hard to trust. This repo shows one way to make them trustworthy: the agent works from a written spec, guardrails enforced in code and checked in CI limit what it can do, a second model reviews every change, and a person still approves every merge.
 
-## See it run: [PR #5](https://github.com/gonzzza/ai-dev-automation/pull/5)
+## See it run: [PR #17](https://github.com/gonzzza/ai-dev-automation/pull/17)
 
-The agent implemented [`specs/001-rate-limiter.md`](specs/001-rate-limiter.md) on its own, and the loop took it from there. The PR history shows every step:
+The agent implemented [`specs/001-rate-limiter.md`](specs/001-rate-limiter.md) on its own, and the loop took it from there. This run gave the agent the [org standards](#org-standards) up front, the same ones the review checks:
+
+1. **The agent opened the PR:** a token bucket rate limiter with tests for every acceptance criterion, each test named after its criterion ID, in 15 turns, for $0.85.
+2. **The AI review checked all five standards** and found one medium gap: no test for two `acquire` calls racing for the same tokens.
+3. **Fix cycle 1 added that test**, for $0.18.
+4. **The final review had one low finding left**, so the loop stopped and handed the PR to a human.
+
+### The first run: [PR #5](https://github.com/gonzzza/ai-dev-automation/pull/5)
+
+The same spec, before the agent had standards or the spec had criterion IDs. It's closed now, superseded by #17, and kept as the record of how the loop got here:
 
 1. **The agent opened the PR:** a token bucket rate limiter with 22 tests, in 13 turns, for $0.74.
 2. **The AI review found a bug the agent's tests missed.** Refill stopped after the system clock stepped backwards.
@@ -38,6 +47,7 @@ That history is the point of the demo. The automation caught a real bug, made a 
 | [`.github/workflows/`](.github/workflows) | CI (`npm run check`) and the AI review with the fix cycle, both running on this repo's own PRs. |
 | [`specs/`](specs) | Feature specs, the agent's input. [`specs/README.md`](specs/README.md) has the template. |
 | [`.claude/skills/write-spec/`](.claude/skills/write-spec/SKILL.md) | A Claude Code skill, `/write-spec <idea>`, that turns a rough idea into a spec: grounded in the code, with the open questions settled and every acceptance criterion testable. |
+| [`.claude/skills/code-spec/`](.claude/skills/code-spec/SKILL.md) | A Claude Code skill, `/code-spec <spec>`, that implements a spec and opens a PR. It asks who codes it: the agent (API spend, guardrails enforced in code) or the Claude Code session itself (no API spend, the agent's brief and checks followed by hand). |
 | [`demo-app/`](demo-app) | A small TypeScript library the agent works on. |
 | [`org-standards/`](org-standards) | Sample org engineering standards. **A stand-in for a separate platform repo**, kept here so the demo is self-contained. See [Org standards](#org-standards). |
 | [`standards/`](standards) | The parser and selector for those standards, shared by the agent and the review action. |
@@ -83,7 +93,7 @@ npm run agent -- specs/001-rate-limiter.md --dry-run   # implement and verify, n
 npm run agent -- specs/001-rate-limiter.md             # open the PR
 ```
 
-The agent creates the branch `agent/001-rate-limiter`, so delete that branch first if it already exists. To write your own spec, run `/write-spec <your idea>` in Claude Code, or copy the template in [`specs/README.md`](specs/README.md).
+The agent creates the branch `agent/001-rate-limiter`, so delete that branch first if it already exists. In Claude Code, `/code-spec 001` checks these preconditions and runs the agent for you. To write your own spec, run `/write-spec <your idea>` in Claude Code, or copy the template in [`specs/README.md`](specs/README.md).
 
 To run the review and the fix cycle on the PR in CI, add two repository secrets:
 
