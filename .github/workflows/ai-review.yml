@@ -75,6 +75,10 @@ jobs:
           node-version-file: .nvmrc
           cache: npm
       - run: npm ci
+      # Agent-written tests run in this image with no network, no secrets and a read-only .git.
+      # Pulled up front so the agent's first check isn't slowed by the download.
+      - name: Pull the checks sandbox image
+        run: docker pull node:24-bookworm
       - name: Fix cycle
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
@@ -93,7 +97,7 @@ jobs:
           printf '%s' "$FINDINGS" > "$RUNNER_TEMP/findings.json"
           npm run agent -- --fix-pr "$PR_NUMBER" --findings "$RUNNER_TEMP/findings.json" \
             --reviewed-sha "$REVIEWED_SHA" --model "$AGENT_MODEL" --max-cycles 5 --max-budget 3 \
-            --log-dir "$RUNNER_TEMP/agent-logs"
+            --log-dir "$RUNNER_TEMP/agent-logs" --sandbox docker
       # The audit log: the transcript, every policy decision, and the outcome, redacted. Uploaded
       # even when the run fails, which is when it matters most. The PR comment links to this run.
       - name: Upload audit log

@@ -28,6 +28,8 @@ Requires `git` and an authenticated [`gh`](https://cli.github.com/).
 | `--max-budget <usd>` | `5` | Hard stop on spend. |
 | `--dry-run` | off | Run and verify, but don't commit, push or open a PR. |
 | `--log-dir <dir>` | `<tmp>/spec-agent-runs` | Where the run's [audit log](#audit-log-and-monitoring) goes. |
+| `--sandbox <kind>` | `none` | Where agent-written tests run: `none` (this machine, with a credential-free environment) or `docker` (an isolated container; see [the sandbox](#the-checks-sandbox)). CI uses `docker`. |
+| `--sandbox-image <image>` | `node:24-bookworm` | Image for `--sandbox docker`. Keep it on the Node version in `.nvmrc`. |
 
 ## How it works
 
@@ -107,7 +109,7 @@ From any line on `main`, `git log` leads to the run that wrote it, and from ther
 
 - **Redaction.** Every line is redacted before it's written: credential values from the environment, and anything matching a known key format, become `[REDACTED]`.
 - **Location.** The log lives outside the repository, so the agent's own tools can't reach it. It's created owner-only (`0700` directory, `0600` file).
-- **It is a record, not tamper-proof evidence.** Tests the agent writes run as the same OS user as the harness, so test code could find the log and edit or truncate it, including the denials it records. For an audit trail that has to hold up against that, send events to an external store as they happen (the OpenTelemetry export below does that for Claude Code's own events), or run the checks in a separate job or sandbox that can't see the log. That separate-job change is the next planned step.
+- **It is a record, not tamper-proof evidence.** Tests the agent writes run as the same OS user as the harness, so test code could find the log and edit or truncate it, including the denials it records. With `--sandbox docker`, as in CI, the tests run in a container that can't see the log, which closes that gap. Without it, the log is a record and not tamper-proof evidence. For an audit trail that must hold up even then, send events to an external store as they happen; the OpenTelemetry export below does that for Claude Code's own events.
 - **Crash safety.** Lines are appended as they happen, so a crashed run still leaves everything up to the crash.
 - **In CI**, the fix job uploads the log as an artifact (`agent-run-<run id>-<attempt>`, kept for 30 days) even when the run fails.
 
@@ -145,6 +147,7 @@ The agent's tools are limited in code, so the limits don't depend on the model f
   - Writes are allowed only inside `--scope`, and never in `node_modules`, `.git`, or the files that define how the checks run (`package.json`, `tsconfig*.json`, Vitest and ESLint config). Changes to those files can't reach the PR, so the PR's CI runs the project's real checks.
   - The SDK's `StructuredOutput` tool is allowed, since it only returns the final report, which the harness validates against the schema.
   - Every other call is denied. The reason goes back to the model so it can correct course.
+- **A sandbox for the checks** (`--sandbox docker`, used in CI). Agent-written code runs only in a throwaway container. See [the checks sandbox](#the-checks-sandbox).
 - **A minimal environment for the checks.** `run_checks` gets only an allowlist of variables that npm, Node and the OS need, such as `PATH`, `HOME` and `TEMP`. The API key, tokens and anything like `DATABASE_URL` are left out, and `gh` is logged out. Git there ignores your global and system config, credential helpers and SSH, so test code can't push with your credentials. From `.env`, the CLI reads only `ANTHROPIC_API_KEY`, never the rest of the file.
 - **Safer git after the run.** Every harness git command runs with hooks and fsmonitor disabled. The harness also refuses to continue if the checked-out branch or commit, the repo's git config (worktrees included) or its hooks changed during the run. That check also covers `.git/info/exclude` and index entries marked assume-unchanged or skip-worktree. A commit, an ignore rule or an index flag set by test code would otherwise hide files from the scope gate. `.gitattributes` and `.gitignore` are protected for the same reason. This closes the in-repo ways planted code could run during the commit and push. The config is compared as git parses it, ignoring only `branch.<name>.vscode-merge-base`, which VS Code's Git extension writes when it notices the new branch. Every other key, and any change git can't parse, still fails the run.
 - **No symlinks.** A changed file that is a symlink fails the run. Git would commit the link's target path, which the secret scan doesn't read, and the link could point outside the repo.
@@ -165,9 +168,36 @@ The gates catch changes to the repo before anything is committed, and anything e
 
 Protecting all of that is a job for an operating-system boundary, not for checks inside the process.
 
-The fix cycle in CI is the same case. Agent-written tests run in a job that also holds `ANTHROPIC_API_KEY` and `AGENT_GITHUB_TOKEN`. The tests' environment leaves both out, and the checkout keeps tokens out of `.git/config`, but code on the runner could still find them. Keep the token scoped to this one repository, so the worst case is a push to this repo's branches, which branch protection and the human approval still guard.
+**`--sandbox docker` is that boundary for the checks.** Use it wherever secrets live; the fix cycle in CI does. Without it, the defenses above are layered but not a sandbox. Run on your machine only specs you trust, with the key in an environment variable rather than in `.env`.
 
-The defenses are layered, but they are not a sandbox. Run on your machine only specs you trust, with the key in an environment variable rather than in `.env`. For anything else, run the agent in a disposable container or a CI job that has only the secrets it needs.
+### The checks sandbox
+
+With `--sandbox docker`, `run_checks` and the harness's own re-check run `npm run check` in a throwaway container, so code the model wrote never runs where the secrets are:
+
+```
+runner: ANTHROPIC_API_KEY, AGENT_GITHUB_TOKEN, the agent, the audit log
+  └─ run_checks ─▶ docker run --network=none, repo mounted, .git and node_modules read-only, no secrets
+                     └─ npm run check   ← agent-written tests run here
+```
+
+| Inside the container | |
+|---|---|
+| Network | None (`--network=none`). Test code can't send anything anywhere or download anything. |
+| Environment | Only `HOME`, `CI` and npm settings, set by the harness. Nothing from the harness process, so no API key or token. |
+| Files | The repo only. `.git` is read-only, so test code can't plant hooks or config. `node_modules` is read-only too, and it is the container's own copy, not the host's. The audit log and everything else on the host are out of reach. |
+| Privileges | No Linux capabilities, no privilege escalation, at most 512 processes and 4 GB of memory, and the host's uid/gid so created files aren't root's. |
+
+**Dependencies.** The container can't reuse the host's `node_modules`. Packages such as rolldown and esbuild ship a native binary per OS, so a Windows or macOS install fails in the Linux container. Before the agent starts, the harness therefore runs `npm ci` from the committed lockfile in a container of its own. That container has network access to download packages, but no secrets, and the repo is read-only. It writes into a Docker volume named after the lockfile and image (`ai-dev-automation-deps-<hash>`). The checks mount that volume read-only. The install happens once per lockfile; later runs reuse the volume in about a second. Old volumes can be removed with `docker volume prune --filter label=ai-dev-automation.deps`.
+
+If Docker isn't available, or the install fails, `--sandbox docker` stops before the agent runs instead of falling back to running the tests unsandboxed. It works on Linux, macOS and Windows hosts, wherever Docker runs Linux containers.
+
+What it doesn't cover:
+
+- **The repo's own files are writable.** They have to be, for the tests to run. Changes to tracked files show up in the diff and go through the gates. Untracked, gitignored files, such as the workspaces' `.vite` caches, are not committed.
+- **Dependencies must all be in the root `node_modules`.** npm sometimes nests packages in a workspace's own `node_modules` when versions conflict. The sandbox replaces only the root folder, so in that case the install stops with a message naming the folders, rather than letting the tests use the host's copies.
+- **No project `.npmrc`.** The install step uses the public npm registry with no credentials, so a project that needs a private registry or other npm settings fails at the install step, before the agent starts.
+- **The install step has network access.** It runs before any agent-written code exists, with only the lockfile and `package.json` files, and installs exactly what the lockfile pins. That's the same trust as CI's own `npm ci`.
+- **The agent process still holds the API key and, in CI, the push token**, because it calls the API and pushes. Moving the push into a separate job that only holds the token would keep the token out of the agent's job entirely.
 
 ## Prompt in Markdown, guardrails in code
 
