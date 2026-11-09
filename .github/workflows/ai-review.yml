@@ -103,10 +103,17 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
         run: |
+          # A missing commit is a broken checkout, not "no standards": fetch it, and fail if that fails.
+          if ! git cat-file -e "$BASE_SHA^{commit}" 2>/dev/null; then
+            git fetch --no-tags --depth=1 origin "$BASE_SHA" ||
+              { echo "::error::Base commit $BASE_SHA is not available, so the fixer can't get the org standards."; exit 1; }
+          fi
           if git cat-file -e "$BASE_SHA:org-standards" 2>/dev/null; then
             mkdir -p "$RUNNER_TEMP/standards"
             git archive "$BASE_SHA" org-standards | tar -x -C "$RUNNER_TEMP/standards"
             echo "path=$RUNNER_TEMP/standards/org-standards" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::The base commit has no org-standards/; the fix cycle runs without standards."
           fi
       - name: Fix cycle
         env:

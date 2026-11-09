@@ -100,7 +100,7 @@ describe("agentOptions", () => {
     ...over,
   });
 
-  it("appends the org standards to the system prompt only when the config has some", () => {
+  it("AC5: appends the org standards to the system prompt only when the config has some", () => {
     expect(agentOptions(task, configWith(), exec).systemPrompt).toEqual({ type: "preset", preset: "claude_code" });
     expect(agentOptions(task, configWith({ standards: [] }), exec).systemPrompt).toEqual({ type: "preset", preset: "claude_code" });
     expect(agentOptions(task, configWith({ standards: [standard] }), exec).systemPrompt).toEqual({
