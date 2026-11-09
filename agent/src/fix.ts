@@ -20,6 +20,8 @@ export const FindingSchema = z.object({
   severity: z.enum(SEVERITIES),
   title: z.string(),
   body: z.string(),
+  /** The inline review comment that holds the finding, when there is one: the fix cycle replies on its thread. */
+  commentId: z.number().int().positive().optional(),
 });
 export type Finding = z.infer<typeof FindingSchema>;
 
@@ -247,6 +249,33 @@ export function fixComment(
   return sections.join("\n\n");
 }
 
+/** A reply on one finding's review thread. `explanation` is model output; the rest is the harness's. */
+export interface ThreadReply {
+  commentId: number;
+  outcome: "fixed" | "declined";
+  explanation: string;
+}
+
+/**
+ * Replies for the findings that have an inline thread. A "fixed" outcome only gets a reply when
+ * there is a commit to point at; the agent saying so is not enough. Unaddressed findings get none:
+ * the summary comment lists them.
+ */
+export function threadReplies(actionable: Finding[], report: FixReport, committed: boolean): ThreadReply[] {
+  return actionable.flatMap((f, i) => {
+    const o = report.outcomes.find((x) => x.finding === i + 1);
+    if (f.commentId === undefined || !o || (o.outcome === "fixed" && !committed)) return [];
+    return [{ commentId: f.commentId, outcome: o.outcome, explanation: oneLine(o.explanation) }];
+  });
+}
+
+/** GitHub links a full commit SHA in a comment to the commit. */
+export function threadReplyBody(reply: ThreadReply, cycle: number, sha: string | undefined): string {
+  const head =
+    reply.outcome === "fixed" && sha ? `✅ **Fixed in ${sha}** (fix cycle ${cycle}).` : `❎ **Declined** in fix cycle ${cycle}; left for a human reviewer.`;
+  return `🤖 ${head}\n\n${reply.explanation}`;
+}
+
 export function stopComment(reason: string, actionable: Finding[], deferred: Finding[]): string {
   return [
     `🤖 **Fix cycle stopped.** ${reason} Handing over to a human reviewer.`,
@@ -275,6 +304,9 @@ export interface FixGitOps {
   /** Raw `git log` output of the trailers on commits in `range`, for parseCycleHistory. */
   cycleTrailers(range: string): Promise<string>;
   commentOnPullRequest(number: number, body: string): Promise<string>;
+  replyToReviewComment(number: number, commentId: number, body: string): Promise<void>;
+  /** Resolves the review thread that starts with `commentId`. */
+  resolveReviewThread(number: number, commentId: number): Promise<void>;
 }
 
 export interface FixDeps extends GateDeps {
@@ -354,16 +386,42 @@ export async function runFixCycle(deps: FixDeps): Promise<FixResult> {
   // handles them: say why on the PR and end the cycle without a commit.
   if ((await git.changedFiles()).length === 0) {
     const body = fixComment(context, run, false);
-    await scanForSecrets(deps, branch, [["the PR comment", body]], []);
-    return { status: "declined", commentUrl: await git.commentOnPullRequest(pullNumber, body), run };
+    const replies = threadReplies(actionable, run.report, false);
+    await scanForSecrets(deps, branch, [["the PR comment", body], ...replyTexts(replies)], []);
+    const commentUrl = await git.commentOnPullRequest(pullNumber, body);
+    await postThreadReplies(deps, replies, cycle, undefined);
+    return { status: "declined", commentUrl, run };
   }
 
   const files = await verifyChanges(deps, branch, gitStateBefore);
   const message = fixCommitMessage(cycle, actionable, run.report, deps.runId);
   const body = fixComment(context, run, true);
-  await scanForSecrets(deps, branch, [["the commit message", message], ["the PR comment", body]], files);
+  const replies = threadReplies(actionable, run.report, true);
+  await scanForSecrets(deps, branch, [["the commit message", message], ["the PR comment", body], ...replyTexts(replies)], files);
 
   await git.commit(files, message);
+  const sha = await git.headSha();
   await git.push(branch);
-  return { status: "fixed", cycle, commentUrl: await git.commentOnPullRequest(pullNumber, body), run };
+  const commentUrl = await git.commentOnPullRequest(pullNumber, body);
+  // After the push, so every reply points at a commit that exists on GitHub.
+  await postThreadReplies(deps, replies, cycle, sha);
+  return { status: "fixed", cycle, commentUrl, run };
+}
+
+const replyTexts = (replies: ThreadReply[]): [string, string][] =>
+  replies.map((r) => [`the reply to review comment ${r.commentId}`, r.explanation]);
+
+/**
+ * Replies on each finding's thread and resolves the fixed ones. Best-effort: the commit is pushed
+ * and the summary comment covers every finding, so a failed reply is logged, not thrown.
+ */
+async function postThreadReplies(deps: FixDeps, replies: ThreadReply[], cycle: number, sha: string | undefined): Promise<void> {
+  for (const reply of replies) {
+    try {
+      await deps.git.replyToReviewComment(deps.pullNumber, reply.commentId, threadReplyBody(reply, cycle, sha));
+      if (reply.outcome === "fixed") await deps.git.resolveReviewThread(deps.pullNumber, reply.commentId);
+    } catch (error) {
+      deps.log(`Warning: could not reply on review comment ${reply.commentId}: ${error instanceof Error ? error.message : String(error)}`);
+    }
+  }
 }

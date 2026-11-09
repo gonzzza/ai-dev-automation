@@ -1,5 +1,7 @@
-import { describe, expect, it } from "vitest";
-import { fingerprintConfig, parsePorcelainZ } from "../src/git.js";
+import { readFile } from "node:fs/promises";
+import { describe, expect, it, vi } from "vitest";
+import type { Exec } from "../src/exec.js";
+import { fingerprintConfig, Git, parsePorcelainZ } from "../src/git.js";
 
 describe("parsePorcelainZ", () => {
   it("keeps the first character of paths whose status starts with a space", () => {
@@ -40,5 +42,41 @@ describe("fingerprintConfig", () => {
   it("does not drop keys that only contain the inert name", () => {
     const input = list("core.vscode-merge-base\nx", "branch.main.vscode-merge-base.extra\nx");
     expect(fingerprintConfig(input)).toBe(["core.vscode-merge-base\nx", "branch.main.vscode-merge-base.extra\nx"].join("\0"));
+  });
+});
+
+describe("Git review threads", () => {
+  /** A fake gh that records each call; `--input` files are read before Git deletes them. */
+  function fakeGh(stdout: (args: string[]) => string = () => "") {
+    const calls: { args: string[]; input?: string }[] = [];
+    const exec: Exec = vi.fn(async (_command: string, args: string[]) => {
+      const i = args.indexOf("--input");
+      calls.push({ args, ...(i === -1 ? {} : { input: await readFile(args[i + 1]!, "utf8") }) });
+      return { code: 0, stdout: stdout(args), stderr: "" };
+    });
+    return { git: new Git(exec, "/repo"), calls };
+  }
+
+  it("replies through the replies endpoint with the body as JSON", async () => {
+    const { git, calls } = fakeGh();
+    const body = 'Fixed in `abc`; "quoted"\n$(not run)';
+    await git.replyToReviewComment(5, 1234, body);
+    expect(calls[0]!.args.slice(0, 4)).toEqual(["api", "--method", "POST", "repos/{owner}/{repo}/pulls/5/comments/1234/replies"]);
+    expect(JSON.parse(calls[0]!.input!)).toEqual({ body });
+  });
+
+  it("finds the thread that starts with the comment and resolves it", async () => {
+    const { git, calls } = fakeGh((args) => (args.some((a) => a.startsWith("query=query")) ? "PRRT_abc\n" : ""));
+    await git.resolveReviewThread(5, 1234);
+    expect(calls[0]!.args).toContain("number=5");
+    expect(calls[0]!.args.at(-1)).toContain("databaseId == 1234");
+    expect(calls[1]!.args).toContain("id=PRRT_abc");
+    expect(calls[1]!.args.at(-1)).toContain("resolveReviewThread");
+  });
+
+  it("fails when no thread starts with the comment", async () => {
+    const { git, calls } = fakeGh();
+    await expect(git.resolveReviewThread(5, 1234)).rejects.toThrow("No review thread starts with comment 1234");
+    expect(calls).toHaveLength(1);
   });
 });

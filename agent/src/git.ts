@@ -156,12 +156,51 @@ export class Git {
     return withTempFile(body, (path) => run(this.exec, "gh", ["pr", "comment", String(number), "--body-file", path], this.cwd));
   }
 
+  /** Replies on an inline review comment's thread. The body goes as a JSON file, so nothing is parsed by gh. */
+  async replyToReviewComment(number: number, commentId: number, body: string): Promise<void> {
+    await withTempFile(JSON.stringify({ body }), (path) =>
+      run(this.exec, "gh", ["api", "--method", "POST", `repos/{owner}/{repo}/pulls/${number}/comments/${commentId}/replies`, "--input", path], this.cwd),
+    );
+  }
+
+  /** Resolves the thread whose first comment is `commentId`. Threads are only addressable through GraphQL. */
+  async resolveReviewThread(number: number, commentId: number): Promise<void> {
+    const threadId = await run(
+      this.exec,
+      "gh",
+      [
+        "api", "graphql", "--paginate",
+        "-F", "owner={owner}", "-F", "repo={repo}", "-F", `number=${number}`,
+        "-f", `query=${REVIEW_THREADS_QUERY}`,
+        "--jq", `.data.repository.pullRequest.reviewThreads.nodes[] | select(.comments.nodes[0].databaseId == ${commentId}) | .id`,
+      ],
+      this.cwd,
+    );
+    if (!threadId) throw new Error(`No review thread starts with comment ${commentId} on PR #${number}.`);
+    await run(this.exec, "gh", ["api", "graphql", "-f", `id=${threadId.split("\n")[0]}`, "-f", `query=${RESOLVE_THREAD_MUTATION}`], this.cwd);
+  }
+
   /** "https://github.com/owner/repo", for links in the PR body. */
   async repoUrl(): Promise<string | undefined> {
     const result = await this.exec("gh", ["repo", "view", "--json", "url", "--jq", ".url"], { cwd: this.cwd });
     return result.code === 0 ? result.stdout.trim() : undefined;
   }
 }
+
+const REVIEW_THREADS_QUERY = `query($owner: String!, $repo: String!, $number: Int!, $endCursor: String) {
+  repository(owner: $owner, name: $repo) {
+    pullRequest(number: $number) {
+      reviewThreads(first: 100, after: $endCursor) {
+        nodes { id comments(first: 1) { nodes { databaseId } } }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }
+}`;
+
+const RESOLVE_THREAD_MUTATION = `mutation($id: ID!) {
+  resolveReviewThread(input: { threadId: $id }) { thread { isResolved } }
+}`;
 
 async function withTempFile<T>(content: string, fn: (path: string) => Promise<T>): Promise<T> {
   const dir = await mkdtemp(join(tmpdir(), "spec-agent-"));
