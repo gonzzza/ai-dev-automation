@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { HookInput } from "@anthropic-ai/claude-agent-sdk";
-import { CHECKS_TOOL, createPolicyHook, decide, isWritable, repoRelative } from "../src/policy.js";
+import { CHECKS_TOOL, REPORT_TOOL, createPolicyHook, decide, isWritable, repoRelative } from "../src/policy.js";
 
 const repoRoot = resolve("/repo");
 const options = { repoRoot, writableDirs: ["demo-app"] };
@@ -49,8 +49,10 @@ describe("decide", () => {
     expect(allowed("Grep", { pattern: "key", glob: "../**" })).toBe(false);
   });
 
-  it("allows the checks tool and denies every other tool", () => {
+  it("allows the checks and report tools and denies every other tool", () => {
     expect(allowed(CHECKS_TOOL, {})).toBe(true);
+    // The SDK returns the structured report through this tool; denying it fails every run.
+    expect(allowed(REPORT_TOOL, { summary: "done" })).toBe(true);
     for (const tool of ["Bash", "WebFetch", "WebSearch", "Task", "mcp__other__run"]) {
       const result = decide(tool, {}, options);
       expect(result).toMatchObject({ behavior: "deny", message: expect.stringContaining("not available") });
