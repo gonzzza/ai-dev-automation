@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { appendFileSync, mkdirSync, statSync } from "node:fs";
+import { appendFileSync, chmodSync, mkdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { redactSecrets } from "./secrets.js";
 
@@ -70,13 +70,13 @@ export class JsonlRunLog implements RunLog {
         // default location is a shared temp directory. (Windows ignores the modes.)
         mkdirSync(this.dir, { recursive: true, mode: 0o700 });
         // mkdirSync keeps an existing directory as it is, and the default path is predictable, so
-        // someone else on a shared machine could have created it first. Refuse one we don't own
-        // exclusively. (Windows reports neither owner nor POSIX modes, so the check is POSIX-only.)
+        // someone else on a shared machine could have created it first. Refuse one owned by another
+        // user; tighten our own to 700 (a plain `mkdir` leaves 755). POSIX-only: Windows reports
+        // neither owner nor POSIX modes.
         if (process.platform !== "win32") {
           const stat = statSync(this.dir);
-          if (stat.uid !== process.getuid?.() || (stat.mode & 0o077) !== 0) {
-            throw new Error(`${this.dir} must be owned by this user with no group or other access (chmod 700).`);
-          }
+          if (stat.uid !== process.getuid?.()) throw new Error(`${this.dir} is owned by another user; choose another --log-dir.`);
+          if ((stat.mode & 0o077) !== 0) chmodSync(this.dir, 0o700);
         }
         this.ready = true;
       }

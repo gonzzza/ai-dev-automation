@@ -102,5 +102,5 @@ jobs:
         with:
           name: agent-run-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/agent-logs/
-          if-no-files-found: ignore
+          if-no-files-found: warn # no log means the run failed before it started, or logging broke
           retention-days: 30

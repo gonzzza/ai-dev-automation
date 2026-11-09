@@ -69,20 +69,15 @@ describe("JsonlRunLog", () => {
     expect(statSync(log.path).mode & 0o777).toBe(0o600);
   });
 
-  it.skipIf(process.platform === "win32")("refuses an existing log dir that others can access, without failing the run", () => {
+  it.skipIf(process.platform === "win32")("tightens an existing log dir of its own to 700 and still writes the log", () => {
     dir = mkdtempSync(join(tmpdir(), "runlog-test-"));
-    const shared = join(dir, "shared");
-    mkdirSync(shared, { mode: 0o777 });
-    chmodSync(shared, 0o777); // as if another user had created it first
-    const warn = vi.spyOn(console, "error").mockImplementation(() => {});
-    try {
-      const log = new JsonlRunLog("run-1", shared, []);
-      log.event({ type: "log", line: "x" });
-      expect(existsSync(log.path)).toBe(false);
-      expect(warn.mock.calls[0]![0]).toContain("no group or other access");
-    } finally {
-      warn.mockRestore();
-    }
+    const loose = join(dir, "runs");
+    mkdirSync(loose);
+    chmodSync(loose, 0o755); // what a plain `mkdir runs` leaves
+    const log = new JsonlRunLog("run-1", loose, []);
+    log.event({ type: "log", line: "x" });
+    expect(existsSync(log.path)).toBe(true);
+    expect(statSync(loose).mode & 0o777).toBe(0o700);
   });
 
   it("never fails the run when the log can't be written, and warns once", () => {
