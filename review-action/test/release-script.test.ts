@@ -1,5 +1,48 @@
 import { describe, expect, it } from "vitest";
-import { latestVersion, majorTag, nextVersion, parseLog, releaseNotes } from "../scripts/release.js";
+import { latestVersion, majorTag, nextVersion, parseLog, planRelease, releaseNotes, type PlanInput } from "../scripts/release.js";
+
+describe("planRelease", () => {
+  const change = { sha: "c".repeat(40), subject: "Fix a bug (#20)" };
+  const input = (over: Partial<PlanInput> = {}): PlanInput => ({
+    bump: "patch",
+    latest: "v1.0.0",
+    latestSha: "sha-v1.0.0",
+    majorSha: "sha-v1.0.0",
+    headSha: "sha-head",
+    commits: [change],
+    repoUrl: "https://github.com/o/r",
+    ...over,
+  });
+
+  it("releases the next version at HEAD when the action changed", () => {
+    const plan = planRelease(input({ bump: "minor" }));
+    expect(plan).toMatchObject({ action: "release", version: "v1.1.0", major: "v1", sha: "sha-head" });
+    expect(plan.action === "release" && plan.notes).toContain("- Fix a bug (#20)");
+  });
+
+  it("releases even when the major tag lags, since moving it to the new release fixes that too", () => {
+    expect(planRelease(input({ majorSha: "sha-older" }))).toMatchObject({ action: "release", version: "v1.0.1", sha: "sha-head" });
+  });
+
+  // An earlier run created v1.0.1 and failed before moving v1: a re-run must finish the job.
+  it("repairs the major tag when nothing changed but it doesn't point to the latest release", () => {
+    expect(planRelease(input({ latest: "v1.0.1", latestSha: "sha-head", majorSha: "sha-v1.0.0", commits: [] }))).toEqual({
+      action: "repair",
+      version: "v1.0.1",
+      major: "v1",
+      sha: "sha-head",
+    });
+  });
+
+  it("repairs to the latest release, not HEAD, when main moved on without changing the action", () => {
+    const plan = planRelease(input({ latest: "v1.0.1", latestSha: "sha-v1.0.1", majorSha: undefined, commits: [] }));
+    expect(plan).toMatchObject({ action: "repair", sha: "sha-v1.0.1" });
+  });
+
+  it("refuses when nothing changed and the major tag is current", () => {
+    expect(() => planRelease(input({ commits: [] }))).toThrow("Nothing to release");
+  });
+});
 
 describe("latestVersion", () => {
   it("picks the highest vX.Y.Z tag, comparing numerically", () => {

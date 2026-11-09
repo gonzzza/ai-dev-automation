@@ -3,9 +3,10 @@
 //
 //   node review-action/scripts/release.ts <patch|minor|major> <notes-file>
 //
-// Writes the notes to <notes-file> and prints `version=vX.Y.Z` and `major=vX` for $GITHUB_OUTPUT.
+// Writes the notes to <notes-file>, and the plan (action, version, major, sha) to $GITHUB_OUTPUT,
+// or to stdout when run outside GitHub Actions.
 import { execFileSync } from "node:child_process";
-import { writeFileSync } from "node:fs";
+import { appendFileSync, writeFileSync } from "node:fs";
 
 export const BUMPS = ["patch", "minor", "major"] as const;
 export type Bump = (typeof BUMPS)[number];
@@ -89,22 +90,78 @@ export function releaseNotes(commits: readonly Commit[], opts: { repoUrl: string
   ].join("\n");
 }
 
+export interface PlanInput {
+  bump: Bump;
+  /** The latest vX.Y.Z tag and the commit it points to. */
+  latest: string;
+  latestSha: string;
+  /** The commit the latest release's major tag (v1) points to, if that tag exists. */
+  majorSha: string | undefined;
+  headSha: string;
+  /** Commits since `latest` that changed the released paths. */
+  commits: readonly Commit[];
+  repoUrl: string;
+}
+
+/**
+ * What a run does. `release` cuts a new version at HEAD and moves the major tag to it. `repair`
+ * finishes an earlier run that created its release but failed before moving the major tag: it
+ * only moves the tag, to the latest release. That way a re-run recovers, with no hand-moved tags.
+ */
+export type ReleasePlan =
+  | { action: "release"; version: string; major: string; sha: string; notes: string }
+  | { action: "repair"; version: string; major: string; sha: string };
+
+export function planRelease(input: PlanInput): ReleasePlan {
+  const { latest, latestSha, majorSha, headSha, commits, repoUrl, bump } = input;
+  if (commits.length === 0) {
+    const major = majorTag(latest);
+    if (majorSha !== latestSha) return { action: "repair", version: latest, major, sha: latestSha };
+  }
+  const version = nextVersion(latest, bump);
+  return { action: "release", version, major: majorTag(version), sha: headSha, notes: releaseNotes(commits, { repoUrl, previous: latest, version }) };
+}
+
 function main(args: string[]): void {
   const [bump, notesFile] = args;
   if (!BUMPS.includes(bump as Bump) || !notesFile) {
     throw new Error("Usage: node review-action/scripts/release.ts <patch|minor|major> <notes-file>");
   }
-  const { GITHUB_SERVER_URL: server, GITHUB_REPOSITORY: repository } = process.env;
+  const { GITHUB_SERVER_URL: server, GITHUB_REPOSITORY: repository, GITHUB_OUTPUT: outputFile } = process.env;
   if (!server || !repository) throw new Error("GITHUB_SERVER_URL and GITHUB_REPOSITORY must be set (they are in GitHub Actions).");
 
-  const git = (...gitArgs: string[]) => execFileSync("git", gitArgs, { encoding: "utf8" });
-  const previous = latestVersion(git("tag", "--list", "v*").split("\n"));
-  if (!previous) throw new Error("No vX.Y.Z tag to bump from. Create the first release by hand.");
+  const git = (...gitArgs: string[]) => execFileSync("git", gitArgs, { encoding: "utf8" }).trim();
+  /** The commit a tag points to, or undefined if there's no such tag. */
+  const commitOf = (tag: string): string | undefined => {
+    try {
+      return git("rev-parse", "--verify", "--quiet", `refs/tags/${tag}^{commit}`);
+    } catch {
+      return undefined;
+    }
+  };
 
-  const version = nextVersion(previous, bump as Bump);
-  const commits = parseLog(git("log", "--format=%H%x09%s", `${previous}..HEAD`, "--", ...RELEASED_PATHS));
-  writeFileSync(notesFile, releaseNotes(commits, { repoUrl: `${server}/${repository}`, previous, version }));
-  console.log(`version=${version}\nmajor=${majorTag(version)}`);
+  const latest = latestVersion(git("tag", "--list", "v*").split("\n"));
+  if (!latest) throw new Error("No vX.Y.Z tag to bump from. Create the first release by hand.");
+
+  const plan = planRelease({
+    bump: bump as Bump,
+    latest,
+    latestSha: commitOf(latest)!,
+    majorSha: commitOf(majorTag(latest)),
+    headSha: git("rev-parse", "HEAD"),
+    commits: parseLog(git("log", "--format=%H%x09%s", `${latest}..HEAD`, "--", ...RELEASED_PATHS)),
+    repoUrl: `${server}/${repository}`,
+  });
+
+  if (plan.action === "release") {
+    writeFileSync(notesFile, plan.notes);
+    console.log(`Releasing ${plan.version} at ${plan.sha}.`);
+  } else {
+    console.log(`::warning::${plan.version} is already released but ${plan.major} doesn't point to it: only moving ${plan.major}. The "${bump}" bump is ignored.`);
+  }
+  const outputs = `action=${plan.action}\nversion=${plan.version}\nmajor=${plan.major}\nsha=${plan.sha}\n`;
+  if (outputFile) appendFileSync(outputFile, outputs);
+  else process.stdout.write(outputs);
 }
 
 if (import.meta.main) {

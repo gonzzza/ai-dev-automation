@@ -47,12 +47,15 @@ jobs:
             echo "::error::review-action/dist is stale on main. Rebuild it in a PR before releasing."
             exit 1
           fi
+      # Plans a new release, or a repair: when an earlier run created its release but failed to
+      # move the major tag, re-running this workflow only moves the tag.
       - name: Plan the release
         id: plan
         env:
           BUMP: ${{ inputs.bump }}
-        run: node review-action/scripts/release.ts "$BUMP" "$RUNNER_TEMP/notes.md" >> "$GITHUB_OUTPUT"
+        run: node review-action/scripts/release.ts "$BUMP" "$RUNNER_TEMP/notes.md"
       - name: Create the release
+        if: steps.plan.outputs.action == 'release'
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.plan.outputs.version }}
@@ -66,10 +69,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.plan.outputs.version }}
           MAJOR: ${{ steps.plan.outputs.major }}
+          SHA: ${{ steps.plan.outputs.sha }} # the release's commit: HEAD for a new release, the latest one for a repair
         run: |
           if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$MAJOR" --silent 2>/dev/null; then
-            gh api --method PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/$MAJOR" -f sha="$GITHUB_SHA" -F force=true --silent
+            gh api --method PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/$MAJOR" -f sha="$SHA" -F force=true --silent
           else
-            gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$MAJOR" -f sha="$GITHUB_SHA" --silent
+            gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$MAJOR" -f sha="$SHA" --silent
           fi
-          echo "::notice::Released $VERSION. $MAJOR now points to it."
+          echo "::notice::$MAJOR now points to $VERSION."
