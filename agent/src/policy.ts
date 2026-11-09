@@ -63,6 +63,9 @@ export function isProtectedConfig(path: string): boolean {
 export function isWritable(path: string, writableDirs: string[]): boolean {
   const segments = path.split("/");
   if (segments.includes("node_modules") || segments.includes(".git") || isProtectedConfig(path)) return false;
+  // The workflows and actions that run the agent and hold its credentials: off limits even when a
+  // --scope covers them, so the agent can't change what runs it on the next push.
+  if (segments[0] === ".github") return false;
   return writableDirs.some((dir) => path.startsWith(`${dir.replace(/\/+$/, "")}/`));
 }
 
