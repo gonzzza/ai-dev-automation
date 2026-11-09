@@ -78,7 +78,7 @@ jobs:
       # Agent-written tests run in this image with no network, no secrets and a read-only .git.
       # Pulled up front so the agent's first check isn't slowed by the download.
       - name: Pull the checks sandbox image
-        run: docker pull node:24-bookworm-slim
+        run: docker pull node:24-bookworm
       - name: Fix cycle
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}

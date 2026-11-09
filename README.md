@@ -134,7 +134,7 @@ The reviewer's findings are advice. The agent may decline a finding with a reaso
 ## Known limitations
 
 - **Reviewer severity varies between runs.** The same clock bug was rated medium, then low, then medium. The severity threshold decides which findings the agent attempts, not what is safe to merge; the human approval decides that.
-- **The sandbox covers the tests, not the agent.** The agent process itself holds the API key and, in CI, the push token. The sandbox needs a Linux host, and locally it's opt-in (`--sandbox docker`). Without it, agent-written tests run on your machine with a credential-free environment but full network and file access.
+- **The sandbox covers the tests, not the agent.** The agent process itself holds the API key and, in CI, the push token. Locally the sandbox is opt-in (`--sandbox docker`, which needs Docker). Without it, agent-written tests run on your machine with a credential-free environment but full network and file access.
 - **An agent branch is identified by its name.** The fix cycle runs on any open `agent/*` PR from this repository, and anyone with push access can create such a branch. In an organization, add a branch ruleset that lets only the agent's GitHub App create `agent/**` branches, or have the fix job check that the PR author is that App.
 - **Cost figures are estimates.** The PR footers and the audit log show the Agent SDK's estimate from token usage at list prices. The review's footer shows token counts only. The [Console](https://console.anthropic.com/settings/usage) has the actual bill.
 

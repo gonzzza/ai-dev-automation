@@ -6,7 +6,7 @@ import { join, relative, resolve } from "node:path";
 import { parseArgs, parseEnv } from "node:util";
 import { runAgent, specTask, type AgentConfig } from "./agent.js";
 import { parseLimit, scopeDir } from "./args.js";
-import { assertSandboxAvailable, DEFAULT_SANDBOX_IMAGE, runChecks, type Sandbox } from "./checks.js";
+import { assertSandboxAvailable, DEFAULT_SANDBOX_IMAGE, prepareSandbox, runChecks, type Sandbox } from "./checks.js";
 import { exec, run } from "./exec.js";
 import { fixTask, loadFixTemplate, parseFindings, runFixCycle, SEVERITIES, specPathForBranch, type Severity } from "./fix.js";
 import { Git } from "./git.js";
@@ -118,11 +118,12 @@ async function main(): Promise<void> {
       runLog,
     };
     await assertSandboxAvailable(exec, sandbox, config.checksEnv);
-    if (sandbox.kind === "docker" && process.platform !== "linux") {
-      // The container reuses this machine's node_modules, whose native binaries (esbuild, rollup)
-      // are built for this OS. On Windows or macOS, run the agent inside a Linux container instead.
-      say(`⚠️ --sandbox docker reuses node_modules installed for ${process.platform}; the checks may fail in the Linux container. It's meant for Linux hosts such as CI.`);
-    }
+    // Dependencies for the container's platform, installed once per lockfile, before the agent runs.
+    config.sandbox = await prepareSandbox(exec, repoRoot, sandbox, {
+      env: config.checksEnv,
+      log: say,
+      readLockfile: () => readFile(resolve(repoRoot, "package-lock.json"), "utf8"),
+    });
 
     const git = new Git(exec, repoRoot);
     const readRepoFile = (path: string) =>
@@ -130,7 +131,7 @@ async function main(): Promise<void> {
     const gates = {
       writableDirs: config.writableDirs,
       runChecks: async () => {
-        const result = await runChecks(exec, repoRoot, config.checksEnv, sandbox);
+        const result = await runChecks(exec, repoRoot, config.checksEnv, config.sandbox);
         runLog.event({ type: "checks.result", by: "harness", ...result });
         return result;
       },
@@ -145,7 +146,7 @@ async function main(): Promise<void> {
       model: config.model,
       effort,
       writableDirs: config.writableDirs,
-      sandbox: sandbox.kind === "docker" ? `docker:${sandbox.image}` : "none",
+      sandbox: config.sandbox?.kind === "docker" ? { image: config.sandbox.image, depsVolume: config.sandbox.depsVolume } : "none",
       maxTurns: config.maxTurns,
       maxBudgetUsd: config.maxBudgetUsd,
     });

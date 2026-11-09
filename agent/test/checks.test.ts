@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { assertSandboxAvailable, DEFAULT_SANDBOX_IMAGE, runChecks, sandboxArgs } from "../src/checks.js";
+import { assertSandboxAvailable, DEFAULT_SANDBOX_IMAGE, depsVolumeName, installArgs, prepareSandbox, runChecks, sandboxArgs } from "../src/checks.js";
 import { exec, type Exec } from "../src/exec.js";
 import { classifyFailure } from "../src/runlog.js";
 
@@ -28,6 +28,12 @@ describe("sandboxArgs", () => {
 
   it("ends with the image and the command", () => {
     expect(args.slice(-4)).toEqual([DEFAULT_SANDBOX_IMAGE, "npm", "run", "check"]);
+  });
+
+  it("mounts the platform's dependencies read-only over node_modules, when prepared", () => {
+    const withDeps = sandboxArgs("/repo", ["true"], { ...docker, depsVolume: "deps-1" });
+    expect(withDeps).toContain("--volume=deps-1:/work/node_modules:ro");
+    expect(args.some((a) => a.includes("/work/node_modules"))).toBe(false);
   });
 
   it("omits --user where the host has no uid (Windows)", () => {
@@ -129,5 +135,49 @@ describe.runIf(dockerAvailable)("the docker sandbox, for real", () => {
     const out = JSON.parse(result.stdout.trim().split("\n").at(-1)!) as Record<string, unknown>;
     expect(out).toMatchObject({ network: "blocked", gitWrite: "EROFS", repoWrite: "ok" });
     expect(out.env).not.toContain("SANDBOX_TEST_TOKEN");
+  });
+});
+
+describe("the dependency volume", () => {
+  it("is named after the lockfile and image, so either changing means a fresh install", () => {
+    const name = depsVolumeName("lock-a", "node:24");
+    expect(name).toMatch(/^ai-dev-automation-deps-[0-9a-f]{16}$/);
+    expect(depsVolumeName("lock-a", "node:24")).toBe(name);
+    expect(depsVolumeName("lock-b", "node:24")).not.toBe(name);
+    expect(depsVolumeName("lock-a", "node:26")).not.toBe(name);
+  });
+
+  it("installs with the repo read-only and no secrets, then hands the files to the host user", () => {
+    const args = installArgs("/repo", "deps-1", docker);
+    expect(args).toEqual(expect.arrayContaining(["--volume=/repo:/src:ro", "--volume=deps-1:/deps", "--cap-drop=ALL", "--security-opt=no-new-privileges"]));
+    expect(args.filter((a) => a.startsWith("--env="))).toEqual(["--env=HOME=/tmp", "--env=npm_config_cache=/tmp/.npm", "--env=npm_config_update_notifier=false"]);
+    const script = args.at(-1)!;
+    expect(script).toContain("npm ci");
+    expect(script).toContain("chown -R 1001:118 /deps");
+    expect(script.trimEnd().split("\n").at(-1)).toBe("touch /deps/.ai-dev-automation-installed"); // marker last
+  });
+
+  it("installs only when the volume isn't complete yet, and attaches it to the sandbox", async () => {
+    const calls: string[][] = [];
+    const fresh: Exec = async (_cmd, args) => (calls.push(args), { code: args.includes("test") ? 1 : 0, stdout: "", stderr: "" });
+    const prepared = await prepareSandbox(fresh, "/repo", docker, { log: () => {}, readLockfile: async () => "lock" });
+    expect(prepared).toEqual({ ...docker, depsVolume: depsVolumeName("lock", docker.image) });
+    expect(calls.map((a) => a.slice(0, 2).join(" "))).toEqual(["run --rm", "volume create", "run --rm"]);
+
+    const again: string[][] = [];
+    const ready: Exec = async (_cmd, args) => (again.push(args), { code: 0, stdout: "", stderr: "" });
+    await prepareSandbox(ready, "/repo", docker, { log: () => {}, readLockfile: async () => "lock" });
+    expect(again).toHaveLength(1); // just the check for the marker
+  });
+
+  it("fails the run before the agent starts if the install fails", async () => {
+    const broken: Exec = async (_cmd, args) => (args.includes("sh") ? { code: 1, stdout: "", stderr: "npm error 404" } : { code: args.includes("test") ? 1 : 0, stdout: "", stderr: "" });
+    await expect(prepareSandbox(broken, "/repo", docker, { log: () => {}, readLockfile: async () => "lock" })).rejects.toThrow(/installing dependencies failed:\n.*npm error 404/s);
+  });
+
+  it("does nothing without a sandbox", async () => {
+    const never: Exec = vi.fn();
+    expect(await prepareSandbox(never, "/repo", { kind: "none" }, { log: () => {}, readLockfile: async () => "" })).toEqual({ kind: "none" });
+    expect(never).not.toHaveBeenCalled();
   });
 });

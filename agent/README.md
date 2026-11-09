@@ -29,7 +29,7 @@ Requires `git` and an authenticated [`gh`](https://cli.github.com/).
 | `--dry-run` | off | Run and verify, but don't commit, push or open a PR. |
 | `--log-dir <dir>` | `<tmp>/spec-agent-runs` | Where the run's [audit log](#audit-log-and-monitoring) goes. |
 | `--sandbox <kind>` | `none` | Where agent-written tests run: `none` (this machine, with a credential-free environment) or `docker` (an isolated container; see [the sandbox](#the-checks-sandbox)). CI uses `docker`. |
-| `--sandbox-image <image>` | `node:24-bookworm-slim` | Image for `--sandbox docker`. Keep it on the Node version in `.nvmrc`. |
+| `--sandbox-image <image>` | `node:24-bookworm` | Image for `--sandbox docker`. Keep it on the Node version in `.nvmrc`. |
 
 ## How it works
 
@@ -176,7 +176,7 @@ With `--sandbox docker`, `run_checks` and the harness's own re-check run `npm ru
 
 ```
 runner: ANTHROPIC_API_KEY, AGENT_GITHUB_TOKEN, the agent, the audit log
-  └─ run_checks ─▶ docker run --network=none, repo mounted, .git read-only, no secrets
+  └─ run_checks ─▶ docker run --network=none, repo mounted, .git and node_modules read-only, no secrets
                      └─ npm run check   ← agent-written tests run here
 ```
 
@@ -184,15 +184,17 @@ runner: ANTHROPIC_API_KEY, AGENT_GITHUB_TOKEN, the agent, the audit log
 |---|---|
 | Network | None (`--network=none`). Test code can't send anything anywhere or download anything. |
 | Environment | Only `HOME`, `CI` and npm settings, set by the harness. Nothing from the harness process, so no API key or token. |
-| Files | The repo only. `.git` is mounted read-only, so test code can't plant hooks or config. The audit log and everything else on the host are out of reach. |
+| Files | The repo only. `.git` is read-only, so test code can't plant hooks or config. `node_modules` is read-only too, and it is the container's own copy, not the host's. The audit log and everything else on the host are out of reach. |
 | Privileges | No Linux capabilities, no privilege escalation, at most 512 processes and 4 GB of memory, and the host's uid/gid so created files aren't root's. |
 
-Dependencies are installed before the agent starts, with `npm ci` from the committed lockfile, and the container uses them offline. If Docker isn't available, `--sandbox docker` fails before the agent runs instead of falling back to running the tests unsandboxed.
+**Dependencies.** The container can't reuse the host's `node_modules`. Packages such as rolldown and esbuild ship a native binary per OS, so a Windows or macOS install fails in the Linux container. Before the agent starts, the harness therefore runs `npm ci` from the committed lockfile in a container of its own. That container has network access to download packages, but no secrets, and the repo is read-only. It writes into a Docker volume named after the lockfile and image (`ai-dev-automation-deps-<hash>`). The checks mount that volume read-only. The install happens once per lockfile; later runs reuse the volume in about a second. Old volumes can be removed with `docker volume prune --filter label=ai-dev-automation.deps`.
+
+If Docker isn't available, or the install fails, `--sandbox docker` stops before the agent runs instead of falling back to running the tests unsandboxed. It works on Linux, macOS and Windows hosts, wherever Docker runs Linux containers.
 
 What it doesn't cover:
 
-- **The repo itself, `node_modules` included, is writable.** Changes to tracked files show up in the diff and go through the gates. Changes to `node_modules` don't, and the harness doesn't run code from there after the checks.
-- **It needs a Linux host.** The container reuses the host's `node_modules`, whose native binaries (esbuild, rollup) are built for the host OS. On Windows or macOS, run the agent itself in a Linux container or a CI job. The CLI warns if you try.
+- **The repo's own files are writable.** They have to be, for the tests to run. Changes to tracked files show up in the diff and go through the gates. Untracked, gitignored files, such as the workspaces' `.vite` caches, are not committed.
+- **The install step has network access.** It runs before any agent-written code exists, with only the lockfile and `package.json` files, and installs exactly what the lockfile pins. That's the same trust as CI's own `npm ci`.
 - **The agent process still holds the API key and, in CI, the push token**, because it calls the API and pushes. Moving the push into a separate job that only holds the token would keep the token out of the agent's job entirely.
 
 ## Prompt in Markdown, guardrails in code
