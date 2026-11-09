@@ -62,6 +62,18 @@ describe("createRateLimiter", () => {
     expect(rl.available()).toBe(10);
   });
 
+  it("AC3: a clock that steps backwards neither removes tokens nor goes negative", () => {
+    const { rl, time } = limiter(4, 2);
+    rl.tryRemove(3);
+    time.advance(-5_000);
+    expect(rl.available()).toBe(1);
+    expect(rl.tryRemove(1)).toBe(true);
+    time.advance(-1_000);
+    expect(rl.available()).toBe(0);
+    time.advance(500); // refill resumes from the latest reading: 1 token
+    expect(rl.available()).toBeCloseTo(1);
+  });
+
   it("AC4: waitTime is 0 when enough tokens are available", () => {
     const { rl } = limiter(5, 2);
     expect(rl.waitTime()).toBe(0);
@@ -85,6 +97,29 @@ describe("createRateLimiter", () => {
     expect(time.state.sleeps).toHaveLength(1);
     expect(time.state.sleeps[0]).toBeCloseTo(expected);
     expect(time.state.sleeps[0]).toBeCloseTo(150);
+    expect(rl.available()).toBeCloseTo(0);
+  });
+
+  it("AC5: acquire waits again when another caller takes the tokens during its sleep", async () => {
+    const time = fakeTime();
+    let stolen = false;
+    const rl = createRateLimiter({
+      capacity: 1,
+      refillPerSecond: 1,
+      now: time.now,
+      sleep: async (ms) => {
+        await time.sleep(ms);
+        if (!stolen) {
+          stolen = true;
+          expect(rl.tryRemove()).toBe(true); // a competing caller wins the refilled token
+        }
+      },
+    });
+    rl.tryRemove();
+    await rl.acquire();
+    expect(time.state.sleeps).toHaveLength(2);
+    expect(time.state.sleeps[0]).toBeCloseTo(1000);
+    expect(time.state.sleeps[1]).toBeCloseTo(1000);
     expect(rl.available()).toBeCloseTo(0);
   });
 
