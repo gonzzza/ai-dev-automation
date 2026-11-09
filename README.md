@@ -10,7 +10,7 @@ flowchart LR
   review -- "findings ≥ medium" --> fix["Agent fixes or declines<br/>(up to 5 cycles)"]
   fix -- "push" --> review
   review -- "only low findings, or none" --> human["Human approves<br/>and merges"]
-  standards[("Org standards<br/>(pinned version)")] -.-> agent
+  standards[("Org standards<br/>(versioned)")] -.-> agent
   standards -.-> review
 ```
 
@@ -102,7 +102,7 @@ Every repo's agent and review follow the same engineering standards, kept in one
 - **The review** checks each PR against the standards that apply to its changed files. A finding that breaks one cites it, e.g. `🐛 Bug · medium · TS-002`.
 - **Every run records which standards it used, at which version:** the review summary, the agent's PR body and its audit log.
 
-**In this repo**, the standards live in [`org-standards/`](org-standards) so the demo is self-contained. The review job and the fix job both read them from the PR's base commit, so a PR can't change the rules it's reviewed and fixed against.
+**In this repo**, the standards live in [`org-standards/`](org-standards) so the demo is self-contained. The review job and the fix job both read them from the PR's base commit, so a PR can't change the rules it's reviewed and fixed against. That commit's SHA is the version each run records. It isn't a pin, though: the base follows `main`, so a standards change merged there applies to the next PR straight away, with no bump PR. Locally, `--standards org-standards` reads your working tree.
 
 **In an enterprise setup**, they belong in their own repository, for example `acme/engineering-standards`:
 
