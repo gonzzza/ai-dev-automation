@@ -8,6 +8,12 @@ permissions:
   contents: read
   pull-requests: write
 
+# Different models write and review the code, so the review doesn't share the author's blind spots.
+# See "Why two models" in the README.
+env:
+  AGENT_MODEL: claude-opus-5-5
+  REVIEW_MODEL: claude-sonnet-5-5
+
 jobs:
   review:
     if: ${{ !github.event.pull_request.draft }}
@@ -28,6 +34,7 @@ jobs:
         uses: ./review-action
         with:
           anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+          model: ${{ env.REVIEW_MODEL }}
           fail-on: none
 
   # Fix cycle: on the agent's own PRs, the agent addresses findings at medium or above, pushes, and
@@ -77,9 +84,12 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number }}
           REVIEWED_SHA: ${{ github.event.pull_request.head.sha }}
         run: |
+          if [ "$AGENT_MODEL" = "$REVIEW_MODEL" ]; then
+            echo "::warning::The agent and the reviewer both use $AGENT_MODEL. The review is less independent; see 'Why two models' in the README."
+          fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           gh auth setup-git # the harness pushes through gh's credential helper, which reads GH_TOKEN
           printf '%s' "$FINDINGS" > "$RUNNER_TEMP/findings.json"
           npm run agent -- --fix-pr "$PR_NUMBER" --findings "$RUNNER_TEMP/findings.json" \
-            --reviewed-sha "$REVIEWED_SHA" --max-cycles 5 --max-budget 3
+            --reviewed-sha "$REVIEWED_SHA" --model "$AGENT_MODEL" --max-cycles 5 --max-budget 3
