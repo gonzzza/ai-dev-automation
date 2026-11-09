@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 import { AGENT_REPORT_JSON_SCHEMA, buildPrompt, describeMessage, loadPromptTemplate } from "../src/agent.js";
 import { parseSpec } from "../src/spec.js";
 
-const spec = parseSpec("specs/002-x.md", "# X\n\n## Goal\ng\n\n## Requirements\nr\n\n## Acceptance criteria\na\n");
+const spec = parseSpec("specs/002-x.md", "# X\n\n## Goal\ng\n\n## Requirements\nr\n\n## Acceptance criteria\n- AC1: a\n");
 
 describe("buildPrompt", () => {
   it("fills prompt.md with the spec and states scope, tools and git rules", async () => {

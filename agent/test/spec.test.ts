@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseSpec } from "../src/spec.js";
+import { checkSpecs, parseSpec } from "../src/spec.js";
 
 const VALID = `# Add a rate limiter
 
@@ -10,7 +10,12 @@ Limit calls.
 - Token bucket.
 
 ## Acceptance criteria
-- Tests pass.
+- AC1: A new limiter is full.
+- AC2: Refill is continuous,
+  including fractional tokens.
+
+## Out of scope
+- Distributed limits.
 `;
 
 describe("parseSpec", () => {
@@ -32,5 +37,106 @@ describe("parseSpec", () => {
 
   it("requires a kebab-case file name, since it becomes the branch name", () => {
     expect(() => parseSpec("specs/My Spec.md", VALID)).toThrow(/kebab-case/);
+  });
+
+  describe("acceptance criteria", () => {
+    it("returns each criterion with its ID and wrapped lines joined, stopping at the next section", () => {
+      expect(parseSpec("specs/a.md", VALID).criteria).toEqual([
+        { id: "AC1", text: "A new limiter is full." },
+        { id: "AC2", text: "Refill is continuous, including fractional tokens." },
+      ]);
+    });
+
+    it("joins nested bullets into their criterion, but not prose after a blank line", () => {
+      const body = VALID.replace("- AC2", "  - for every option\n\nIndented after a gap:\n  ignored\n- AC2");
+      expect(parseSpec("specs/a.md", body).criteria[0]).toEqual({ id: "AC1", text: "A new limiter is full. - for every option" });
+    });
+
+    it("keeps reading criteria after a code block with a # comment in it", () => {
+      const body = VALID.replace("- AC2", "```sh\n# start the server\n## not a heading either\n```\n- AC2");
+      expect(parseSpec("specs/a.md", body).criteria.map((c) => c.id)).toEqual(["AC1", "AC2"]);
+    });
+
+    it("finds the real section after an example spec in a code block", () => {
+      const example = "```markdown\n## Acceptance criteria\n- AC1: from the example\n```\n";
+      const body = VALID.replace("- Token bucket.\n", `- Token bucket.\n${example}`);
+      expect(parseSpec("specs/a.md", body).criteria).toEqual([
+        { id: "AC1", text: "A new limiter is full." },
+        { id: "AC2", text: "Refill is continuous, including fractional tokens." },
+      ]);
+    });
+
+    it("doesn't count headings in code blocks as the spec's own sections", () => {
+      const body = VALID.replace("## Acceptance criteria\n", "```\n## Acceptance criteria\n```\n");
+      expect(() => parseSpec("specs/a.md", body)).toThrow(/missing section\(s\): Acceptance criteria/);
+    });
+
+    it("closes a code block only on a matching fence", () => {
+      // A ``` line inside a ~~~ block is content; the block ends at ~~~, so AC2 is still found.
+      const body = VALID.replace("- AC2", "~~~\n```\n## Out of scope\n~~~\n- AC2");
+      expect(parseSpec("specs/a.md", body).criteria.map((c) => c.id)).toEqual(["AC1", "AC2"]);
+    });
+
+    it("treats an unclosed code block as running to the end of the file", () => {
+      const body = VALID.replace("- AC2", "```\n- AC2");
+      expect(parseSpec("specs/a.md", body).criteria.map((c) => c.id)).toEqual(["AC1"]);
+    });
+
+    it("ignores bullets inside fenced code blocks", () => {
+      const body = VALID.replace("- AC2", "```ts\n- not a criterion\n```\n- AC2");
+      expect(parseSpec("specs/a.md", body).criteria).toEqual([
+        { id: "AC1", text: "A new limiter is full." },
+        { id: "AC2", text: "Refill is continuous, including fractional tokens." },
+      ]);
+    });
+
+    it("reads CRLF files and * bullets", () => {
+      const crlf = VALID.replace("- AC2", "* AC2").replace(/\n/g, "\r\n");
+      expect(parseSpec("specs/a.md", crlf).criteria.map((c) => c.id)).toEqual(["AC1", "AC2"]);
+    });
+
+    it("allows prose and nested bullets between criteria", () => {
+      const body = VALID.replace("- AC2", "Edge cases:\n  - nested detail\n- AC2");
+      expect(parseSpec("specs/a.md", body).criteria.map((c) => c.id)).toEqual(["AC1", "AC2"]);
+    });
+
+    it("rejects a criterion without an ID, suggesting the next one", () => {
+      expect(() => parseSpec("specs/a.md", VALID.replace("- AC2: ", "- "))).toThrow(/needs an ID, e.g. "- AC2: \.\.\."/);
+    });
+
+    it("rejects malformed IDs", () => {
+      expect(() => parseSpec("specs/a.md", VALID.replace("AC2:", "AC0:"))).toThrow(/needs an ID/);
+      expect(() => parseSpec("specs/a.md", VALID.replace("AC2:", "AC2 -"))).toThrow(/needs an ID/);
+      expect(() => parseSpec("specs/a.md", VALID.replace("AC2: Refill is continuous,", "AC2:"))).toThrow(/needs an ID/);
+    });
+
+    it("rejects duplicate IDs", () => {
+      expect(() => parseSpec("specs/a.md", VALID.replace("AC2", "AC1"))).toThrow(/duplicate acceptance criterion ID AC1/);
+    });
+
+    it("rejects an empty section", () => {
+      const body = VALID.replace(/- AC1[\s\S]*?(?=\n## Out)/, "TBD\n");
+      expect(() => parseSpec("specs/a.md", body)).toThrow(/at least one/);
+    });
+  });
+});
+
+describe("checkSpecs", () => {
+  it("accepts valid, uniquely numbered specs", () => {
+    expect(checkSpecs([{ path: "specs/001-a.md", body: VALID }, { path: "specs/002-b.md", body: VALID }])).toEqual([]);
+  });
+
+  it("reports every problem across files, not just the first", () => {
+    const errors = checkSpecs([
+      { path: "specs/001-a.md", body: VALID },
+      { path: "specs/001-b.md", body: VALID },
+      { path: "specs/add-cache.md", body: VALID },
+      { path: "specs/003-c.md", body: "no title" },
+    ]);
+    expect(errors).toEqual([
+      "specs/001-b.md: number 001 is already used by specs/001-a.md",
+      "specs/add-cache.md: file name must start with a number, e.g. 002-add-cache.md",
+      expect.stringMatching(/^specs\/003-c\.md: .*# Title/),
+    ]);
   });
 });

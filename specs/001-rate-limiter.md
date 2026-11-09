@@ -18,14 +18,14 @@ Callers of external APIs need to stay under rate limits as well as retry failure
 - Invalid options or token counts throw `RangeError` with a message naming the bad value: non-positive capacity or rate, non-integer capacity, and token counts that are not positive or exceed `capacity`, since those could never succeed.
 
 ## Acceptance criteria
-- A new limiter has `capacity` tokens available.
-- `tryRemove` succeeds until the bucket is empty, then fails without going negative.
-- Tokens refill with elapsed time at `refillPerSecond`, including fractional amounts, and never exceed `capacity`.
-- `waitTime` returns the exact time needed for a partially refilled bucket, and 0 when enough tokens are available.
-- `acquire` waits exactly `waitTime` via the injected `sleep`, then takes the tokens.
-- Every invalid input listed above throws `RangeError`.
-- Tests use the injected clock and sleep only, with no real timers, and run in milliseconds.
-- `demo-app/README.md` documents the limiter with a short example.
+- AC1: A new limiter has `capacity` tokens available.
+- AC2: `tryRemove` succeeds until the bucket is empty, then fails without going negative.
+- AC3: Tokens refill with elapsed time at `refillPerSecond`, including fractional amounts, and never exceed `capacity`.
+- AC4: `waitTime` returns the exact time needed for a partially refilled bucket, and 0 when enough tokens are available.
+- AC5: `acquire` waits exactly `waitTime` via the injected `sleep`, then takes the tokens.
+- AC6: Every invalid input listed above throws `RangeError`.
+- AC7: Tests use the injected clock and sleep only, with no real timers, and run in milliseconds.
+- AC8: `demo-app/README.md` documents the limiter with a short example.
 
 ## Out of scope
 - Sharing a limiter across processes or machines.

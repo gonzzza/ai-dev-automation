@@ -10,7 +10,8 @@
   "scripts": {
     "start": "tsx src/cli.ts",
     "typecheck": "tsc --noEmit",
-    "test": "vitest run"
+    "test": "vitest run",
+    "spec:check": "tsx src/spec-check.ts"
   },
   "devDependencies": {
     "tsx": "^4.23.15"
