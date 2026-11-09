@@ -36,3 +36,10 @@ updates:
       production:
         dependency-type: production
         update-types: [minor, patch]
+    ignore:
+      # TypeScript 7 is the native (Go) compiler and drops the JavaScript compiler API that
+      # typescript-eslint's typed linting is built on; typescript-eslint 8 caps its peer range at
+      # <6.1.0. Stay on 6.x (minor and patch updates still come) until typescript-eslint supports 7,
+      # then delete this rule.
+      - dependency-name: typescript
+        update-types: [version-update:semver-major]
