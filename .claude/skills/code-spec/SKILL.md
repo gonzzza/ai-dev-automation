@@ -15,7 +15,7 @@ This repo demonstrates **spec → code → PR → AI review → human approves**
 | Cost | The user's subscription | API spend from the repo's key, capped at $5 a run | API spend from the user's key, capped by `--max-budget` (default $5) |
 | Branch | `spec/<spec-file-name>` | `agent/<spec-file-name>` | `agent/<spec-file-name>` |
 | PR author | The user | The agent's GitHub App (`<app>[bot]`) | The user (their `gh` login) |
-| Gates (scope, secrets, checks) | Run by you, following step 4b | Enforced by the harness in code | Enforced by the harness in code |
+| Gates (scope, secrets, checks) | Run by you, following step 4c | Enforced by the harness in code | Enforced by the harness in code |
 | Checks sandbox | None | Docker, always | Docker if available |
 | Audit log, `Agent-Run` trailer | No | Yes, the log kept as a run artifact | Yes, the log on this machine |
 | CI fix cycle on review findings | No. You address findings here. | Yes, automatic | No: it only runs on PRs the App opened. You address findings here. |
@@ -69,10 +69,12 @@ If the user already said who codes it ("do it yourself", "with the agent"), don'
 
 Settle these yourself and state them:
 
-- **Scope.** The default is `demo-app`. If the spec changes other workspaces (for example `agent/`, `standards/`, `review-action/`), include each one and point it out. The scope limits what may change in both modes.
+- **Scope.** The default is `demo-app`. If the spec changes other workspaces (for example `agent/`, `standards/`, `review-action/`), include each one and point it out. The scope limits what may change in every mode. The agent in CI always runs with `demo-app`, so if the spec needs more, it isn't an option.
 - **Local agent:** pass the scope as one `--scope <dir>` per directory. Leave it out only when the scope is exactly `demo-app`, the agent's default. A scope you state but don't pass makes the agent run with its default, and the run then fails the scope gate after spending money. If the base isn't `main`, pass `--base <base>`. Use `--sandbox docker` if `docker info` succeeded, otherwise `--sandbox none`. Keep the default limits (`--max-turns 60`, `--max-budget 5`, `--effort high`) unless the spec is large or a previous run hit a limit. With standards: `--standards org-standards --standards-ref <short SHA of the base>`.
 
-## 4a. Agent mode: run it
+Then follow the step for the chosen mode: 4a for the local agent, 4b for the agent in CI, 4c for this session.
+
+## 4a. Local agent: run it
 
 Show the exact command and wait for a clear yes. A run spends API money, and a real run pushes a branch and opens a PR.
 
@@ -86,7 +88,7 @@ A run takes several minutes, so start it with `run_in_background` and wait for t
 
 Then go to step 5.
 
-## 4c. Agent in CI: start the workflow
+## 4b. Agent in CI: start the workflow
 
 Show the exact command and wait for a clear yes. A run spends API money, pushes a branch and opens a PR.
 
@@ -104,7 +106,7 @@ Then:
 
 Then go to step 5.
 
-## 4b. Session mode: implement it, then run the gates yourself
+## 4c. Session mode: implement it, then run the gates yourself
 
 You do the agent's job and the harness's job, under the same rules.
 
@@ -164,5 +166,7 @@ Give the user:
 - **Local agent:** the run id (for example `20261109T073012Z-3f9a1c`), the audit log path (`<log dir>/<run id>.jsonl`), and the cost and turns, if printed.
 - **Agent in CI:** the workflow run's URL, the PR's author, and the cost and turns from the run's log. The audit log is the run's `agent-run-<run id>-<attempt>` artifact (`gh run download <id>`).
 - **On a PR:** the URL. The AI review runs in CI on every PR. On a PR from the agent in CI, the fix cycle may then push commits that address its findings and reply on each finding's thread. On a session PR or a local agent PR it doesn't, so offer to handle the findings here under the same rules: check each one against the code, fix the real ones with a test, decline the wrong ones with a reason, and reply on each finding's thread. Don't merge. Merging is the human's job.
-- **On an agent dry run:** the branch and the changed files (`git status`, `git diff --stat`). Offer to show the diff. To open a PR next, the dry-run changes have to go and the branch must be deleted. Offer to do that, with confirmation, before a real run: switch back to the base, discard the changes, delete the branch. A real run starts fresh and costs a second run.
-- **On an agent failure:** the error, and that the branch is kept for inspection. For the agent in CI, the error is in `gh run view <id> --log-failed` and the audit log artifact, and nothing was pushed unless the PR step itself failed. Suggest the likely fix: a clearer spec (offer `/write-spec` to revise it), a higher limit, or a wider scope. Don't patch the agent's code yourself to make it pass. If the user wants it done anyway, offer session mode on a fresh `spec/<name>` branch.
+- **On a local agent dry run:** the branch and the changed files (`git status`, `git diff --stat`). Offer to show the diff. To open a PR next, the dry-run changes have to go and the branch must be deleted. Offer to do that, with confirmation, before a real run: switch back to the base, discard the changes, delete the branch. A real run starts fresh and costs a second run.
+- **On a local agent failure:** the error, and that the branch is kept for inspection.
+- **On an agent in CI failure:** the error, from `gh run view <id> --log-failed` and the audit log artifact. The branch only existed on the runner, so there is nothing to check out, unless the run failed after its push: check `git ls-remote --heads origin agent/<name>`, and offer to delete that branch, with confirmation, before a rerun.
+- **On either failure,** suggest the likely fix: a clearer spec (offer `/write-spec` to revise it), a higher limit, or a wider scope. Don't patch the agent's code yourself to make it pass. If the user wants it done anyway, offer session mode on a fresh `spec/<name>` branch.
