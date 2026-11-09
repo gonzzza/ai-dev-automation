@@ -16,18 +16,31 @@ flowchart LR
 
 AI coding agents are fast, but unattended they are hard to trust. This repo shows one way to make them trustworthy: the agent works from a written spec, guardrails enforced in code and checked in CI limit what it can do, a second model reviews every change, and a person still approves every merge.
 
-## See it run: [PR #17](https://github.com/gonzzza/ai-dev-automation/pull/17)
+## See it run: [PR #23](https://github.com/gonzzza/ai-dev-automation/pull/23)
 
-The agent implemented [`specs/001-rate-limiter.md`](specs/001-rate-limiter.md) on its own, and the loop took it from there. This run gave the agent the [org standards](#org-standards) up front, the same ones the review checks:
+The agent implemented [`specs/001-rate-limiter.md`](specs/001-rate-limiter.md) from the *Implement a spec* workflow, as its own GitHub App, with the [org standards](#org-standards) the review also checks. The loop took it from there with no human involved:
 
-1. **The agent opened the PR:** a token bucket rate limiter with tests for every acceptance criterion, each test named after its criterion ID, in 15 turns, for $0.85.
-2. **The AI review checked all five standards** and found one medium gap: no test for two `acquire` calls racing for the same tokens.
-3. **Fix cycle 1 added that test**, for $0.18.
-4. **The final review had one low finding left**, so the loop stopped and handed the PR to a human.
+1. **The agent opened the PR** as `ai-dev-automation-agent[bot]`: a token bucket rate limiter with a test for every acceptance criterion, each named after its criterion ID, in 14 turns, for $0.29.
+2. **The AI review found a gap** (medium, citing standard `TEST-001`): no test for a clock that steps backwards or for `acquire` sleeping twice.
+3. **Fix cycle 1 added both tests**, for $0.16, then replied on the finding's thread and resolved it:
+
+   [![The review's finding and the agent's reply on the same thread: "Fixed in 5e43145 (fix cycle 1)", with the thread resolved](docs/images/pr23-thread-fixed.png)](https://github.com/gonzzza/ai-dev-automation/pull/23#discussion_r4517880957)
+
+4. **The next review caught the agent's own test reading the real clock** (high, breaking `TEST-002`, the standard on injected clocks). **Fix cycle 2 rewrote it**, for $0.10, and left one low finding for the human:
+
+   [![Fix cycle 2's summary: the high finding fixed, a low finding left for human review](docs/images/pr23-fix-cycle-2.png)](https://github.com/gonzzza/ai-dev-automation/pull/23#issuecomment-6751295016)
+
+5. **The last review had only a low finding**, so the loop stopped and handed the PR to a human, who decides whether it merges.
+
+Every commit, comment and reply on the PR comes from the bot, about $0.55 of agent spend in all. One of the low findings is a clock bug: a clock that steps backwards later gets refilled twice. As in the first run below, the reviewer rated a clock bug low, so the agent left it alone and a person decides.
+
+### The second run: [PR #17](https://github.com/gonzzza/ai-dev-automation/pull/17)
+
+The same spec, run before the agent had its own identity. It opened the PR under the maintainer's account, so the PR looked hand-written, and its fix cycle fixed a finding but never replied on the thread. Two bugs, both fixed since: the reply step matched no comments ([#20](https://github.com/gonzzza/ai-dev-automation/pull/20)), and the agent acted as a person ([#22](https://github.com/gonzzza/ai-dev-automation/pull/22)). Closed, superseded by #23.
 
 ### The first run: [PR #5](https://github.com/gonzzza/ai-dev-automation/pull/5)
 
-The same spec, before the agent had standards or the spec had criterion IDs. It's closed now, superseded by #17, and kept as the record of how the loop got here:
+The same spec, before the agent had standards or the spec had criterion IDs. It's closed now and kept as the record of how the loop got here:
 
 1. **The agent opened the PR:** a token bucket rate limiter with 22 tests, in 13 turns, for $0.74.
 2. **The AI review found a bug the agent's tests missed.** Refill stopped after the system clock stepped backwards.
@@ -44,10 +57,10 @@ That history is the point of the demo. The automation caught a real bug, made a 
 |------|------------|
 | [`agent/`](agent) | The spec-driven agent, built on the [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk). It reads a spec, implements it with tests, verifies the result independently, and opens a PR. In fix mode it addresses review findings on its own PRs. |
 | [`review-action/`](review-action) | A GitHub Action that reviews a PR's diff with Claude and posts inline comments on bugs, security issues and missing tests. Other repositories can use it on its own. |
-| [`.github/workflows/`](.github/workflows) | CI (`npm run check`) and the AI review with the fix cycle, both running on this repo's own PRs. |
+| [`.github/workflows/`](.github/workflows) | CI (`npm run check`) and the AI review with the fix cycle on this repo's own PRs; *Implement a spec*, which runs the agent as its GitHub App; and *Release review action*. |
 | [`specs/`](specs) | Feature specs, the agent's input. [`specs/README.md`](specs/README.md) has the template. |
 | [`.claude/skills/write-spec/`](.claude/skills/write-spec/SKILL.md) | A Claude Code skill, `/write-spec <idea>`, that turns a rough idea into a spec: grounded in the code, with the open questions settled and every acceptance criterion testable. |
-| [`.claude/skills/code-spec/`](.claude/skills/code-spec/SKILL.md) | A Claude Code skill, `/code-spec <spec>`, that implements a spec and opens a PR. It asks who codes it: the agent (API spend, guardrails enforced in code) or the Claude Code session itself (no API spend, the agent's brief and checks followed by hand). |
+| [`.claude/skills/code-spec/`](.claude/skills/code-spec/SKILL.md) | A Claude Code skill, `/code-spec <spec>`, that implements a spec and opens a PR. It asks who codes it: the agent, in CI as its GitHub App or locally (API spend, guardrails enforced in code), or the Claude Code session itself (no API spend, the agent's brief and checks followed by hand). |
 | [`demo-app/`](demo-app) | A small TypeScript library the agent works on. |
 | [`org-standards/`](org-standards) | Sample org engineering standards. **A stand-in for a separate platform repo**, kept here so the demo is self-contained. See [Org standards](#org-standards). |
 | [`standards/`](standards) | The parser and selector for those standards, shared by the agent and the review action. |
