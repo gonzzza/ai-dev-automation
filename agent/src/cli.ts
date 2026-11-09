@@ -6,7 +6,7 @@ import { join, relative, resolve } from "node:path";
 import { parseArgs, parseEnv } from "node:util";
 import { runAgent, specTask, type AgentConfig } from "./agent.js";
 import { parseLimit, scopeDir } from "./args.js";
-import { runChecks } from "./checks.js";
+import { assertSandboxAvailable, DEFAULT_SANDBOX_IMAGE, runChecks, type Sandbox } from "./checks.js";
 import { exec, run } from "./exec.js";
 import { fixTask, loadFixTemplate, parseFindings, runFixCycle, SEVERITIES, specPathForBranch, type Severity } from "./fix.js";
 import { Git } from "./git.js";
@@ -27,6 +27,9 @@ Options:
   --max-budget <usd>  Stop the agent past this spend. Default: 5
   --dry-run           Run and verify, but don't commit, push or open a PR
   --log-dir <dir>     Where the run's audit log (<run id>.jsonl) goes. Default: <tmp>/spec-agent-runs
+  --sandbox <kind>    Where agent-written tests run: none (this machine, credential-free env) or
+                      docker (container: no network, no secrets, read-only .git). Default: none
+  --sandbox-image <i> Image for --sandbox docker. Default: ${DEFAULT_SANDBOX_IMAGE}
 
 Fix cycle (run on a checked-out agent/* PR branch):
   --fix-pr <number>      Address the AI review's findings on this PR, commit and push
@@ -47,6 +50,8 @@ async function main(): Promise<void> {
       "max-budget": { type: "string", default: "5" },
       "dry-run": { type: "boolean", default: false },
       "log-dir": { type: "string", default: join(tmpdir(), "spec-agent-runs") },
+      sandbox: { type: "string", default: "none" },
+      "sandbox-image": { type: "string", default: DEFAULT_SANDBOX_IMAGE },
       "fix-pr": { type: "string" },
       findings: { type: "string" },
       "reviewed-sha": { type: "string" },
@@ -92,6 +97,14 @@ async function main(): Promise<void> {
     if (!process.env.ANTHROPIC_API_KEY) throw new Error("Set ANTHROPIC_API_KEY (environment or .env at the repo root).");
     const effort = values.effort as AgentConfig["effort"];
     if (!["low", "medium", "high", "xhigh", "max"].includes(effort)) throw new Error(`Invalid --effort: ${effort}`);
+    if (values.sandbox !== "none" && values.sandbox !== "docker") throw new Error(`Invalid --sandbox: ${values.sandbox}`);
+    // The container runs as this user on Linux and macOS, so files the tests create are ours.
+    const sandbox: Sandbox =
+      values.sandbox === "docker" ? { kind: "docker", image: values["sandbox-image"], uid: process.getuid?.(), gid: process.getgid?.() } : { kind: "none" };
+    const checksEnvironment = checksEnv(process.env, await mkdtemp(resolve(tmpdir(), "agent-gh-")));
+    // With the sandbox, that environment only reaches the docker client, which may need to know
+    // where its daemon is. Nothing of it passes into the container.
+    const dockerClient = Object.fromEntries(Object.entries(process.env).filter(([name]) => /^DOCKER_(HOST|CONTEXT|CONFIG|CERT_PATH|TLS_VERIFY)$/.test(name)));
     const config: AgentConfig = {
       repoRoot,
       writableDirs: values.scope.map((dir) => scopeDir(repoRoot, userCwd, dir)),
@@ -100,9 +113,16 @@ async function main(): Promise<void> {
       maxTurns: parseLimit("--max-turns", values["max-turns"], { integer: true }),
       maxBudgetUsd: parseLimit("--max-budget", values["max-budget"]),
       // run_checks executes code the agent wrote, so it gets no credentials and a logged-out gh.
-      checksEnv: checksEnv(process.env, await mkdtemp(resolve(tmpdir(), "agent-gh-"))),
+      checksEnv: sandbox.kind === "docker" ? { ...checksEnvironment, ...dockerClient } : checksEnvironment,
+      sandbox,
       runLog,
     };
+    await assertSandboxAvailable(exec, sandbox, config.checksEnv);
+    if (sandbox.kind === "docker" && process.platform !== "linux") {
+      // The container reuses this machine's node_modules, whose native binaries (esbuild, rollup)
+      // are built for this OS. On Windows or macOS, run the agent inside a Linux container instead.
+      say(`⚠️ --sandbox docker reuses node_modules installed for ${process.platform}; the checks may fail in the Linux container. It's meant for Linux hosts such as CI.`);
+    }
 
     const git = new Git(exec, repoRoot);
     const readRepoFile = (path: string) =>
@@ -110,7 +130,7 @@ async function main(): Promise<void> {
     const gates = {
       writableDirs: config.writableDirs,
       runChecks: async () => {
-        const result = await runChecks(exec, repoRoot, config.checksEnv);
+        const result = await runChecks(exec, repoRoot, config.checksEnv, sandbox);
         runLog.event({ type: "checks.result", by: "harness", ...result });
         return result;
       },
@@ -125,6 +145,7 @@ async function main(): Promise<void> {
       model: config.model,
       effort,
       writableDirs: config.writableDirs,
+      sandbox: sandbox.kind === "docker" ? `docker:${sandbox.image}` : "none",
       maxTurns: config.maxTurns,
       maxBudgetUsd: config.maxBudgetUsd,
     });

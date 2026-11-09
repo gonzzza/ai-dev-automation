@@ -3,7 +3,7 @@ import { isAbsolute, relative } from "node:path";
 import { fileURLToPath } from "node:url";
 import { query, type Options, type SDKMessage } from "@anthropic-ai/claude-agent-sdk";
 import { z } from "zod";
-import { createChecksServer } from "./checks.js";
+import { createChecksServer, type Sandbox } from "./checks.js";
 import type { Exec } from "./exec.js";
 import type { RunLog } from "./runlog.js";
 import { AGENT_TOOLS, CHECKS_TOOL, createPolicyHook, createToolPolicy } from "./policy.js";
@@ -30,6 +30,8 @@ export interface AgentConfig {
   maxBudgetUsd: number;
   /** Environment for run_checks, without credentials. */
   checksEnv?: NodeJS.ProcessEnv;
+  /** Where run_checks executes the agent's code. Default: directly, with checksEnv. */
+  sandbox?: Sandbox;
   /** Audit log: every SDK message (the transcript) and every policy decision. */
   runLog?: RunLog;
 }
@@ -107,7 +109,7 @@ export async function runAgent<Report>(
     settingSources: ["project"],
     systemPrompt: { type: "preset", preset: "claude_code" },
     tools: AGENT_TOOLS,
-    mcpServers: { repo: createChecksServer(exec, config.repoRoot, config.checksEnv) },
+    mcpServers: { repo: createChecksServer(exec, config.repoRoot, config.checksEnv, config.sandbox) },
     // The policy runs as a PreToolUse hook, which sees every tool call, and again as canUseTool for
     // anything Claude Code would otherwise prompt for. Nothing is pre-approved.
     permissionMode: "default",
