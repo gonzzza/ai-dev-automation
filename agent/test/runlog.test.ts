@@ -1,11 +1,11 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { parseFindings } from "../src/fix.js";
 import { parseLimit } from "../src/args.js";
 import { parseSpec } from "../src/spec.js";
-import { classifyFailure, JsonlRunLog, newRunId, withRunLog, type RunEvent, type RunLog } from "../src/runlog.js";
+import { classifyFailure, JsonlRunLog, newRunId, totalsOf, withRunLog, type RunEvent, type RunLog } from "../src/runlog.js";
 
 describe("newRunId", () => {
   it("is sortable by time and unique per run", () => {
@@ -47,10 +47,32 @@ describe("JsonlRunLog", () => {
     expect(JSON.parse(text)).toMatchObject({ message: { content: ["key: [REDACTED]", "pw: [REDACTED]"] }, error: { message: "failed with [REDACTED]" } });
   });
 
+  it("creates the log on first write, and an unusable log dir doesn't fail the run", () => {
+    dir = mkdtempSync(join(tmpdir(), "runlog-test-"));
+    writeFileSync(join(dir, "a-file"), "");
+    const warn = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const log = new JsonlRunLog("run-1", join(dir, "a-file", "logs"), []); // a dir under a file
+      expect(() => log.event({ type: "agent.end", costUsd: 1, turns: 2 })).not.toThrow();
+      expect(log.totals()).toEqual({ costUsd: 1, turns: 2 }); // still counted without a file
+      expect(warn).toHaveBeenCalledOnce();
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it.skipIf(process.platform === "win32")("makes the log readable by its owner only", () => {
+    dir = mkdtempSync(join(tmpdir(), "runlog-test-"));
+    const log = new JsonlRunLog("run-1", join(dir, "logs"), []);
+    log.event({ type: "log", line: "x" });
+    expect(statSync(join(dir, "logs")).mode & 0o777).toBe(0o700);
+    expect(statSync(log.path).mode & 0o777).toBe(0o600);
+  });
+
   it("never fails the run when the log can't be written, and warns once", () => {
     dir = mkdtempSync(join(tmpdir(), "runlog-test-"));
     const log = new JsonlRunLog("run-1", dir, []);
-    mkdirSync(log.path); // a directory where the file should be: every append fails
+    mkdirSync(log.path, { recursive: true }); // a directory where the file should be: every append fails
     const warn = vi.spyOn(console, "error").mockImplementation(() => {});
     try {
       expect(() => {
@@ -78,11 +100,21 @@ describe("withRunLog", () => {
 
   it("brackets the run with start and end events, ending with the summary", async () => {
     const log = memoryLog();
-    await withRunLog(log, { mode: "spec" }, async () => ({ status: "opened", costUsd: 0.74 }), clock);
+    await withRunLog(log, { mode: "spec" }, async () => ({ status: "opened" }), clock);
     expect(log.events).toEqual([
       { type: "run.start", mode: "spec" },
-      { type: "run.end", ok: true, durationMs: 500, status: "opened", costUsd: 0.74 },
+      { type: "run.end", ok: true, durationMs: 500, status: "opened" },
     ]);
+  });
+
+  it("puts the agent's cost and turns in run.end, also when the run fails after the agent ran", async () => {
+    const log = Object.assign(memoryLog(), { totals: () => totalsOf(log.events) });
+    const failing = withRunLog(log, {}, async () => {
+      log.event({ type: "agent.end", costUsd: 4.98, turns: 60 });
+      throw new Error("Checks failed after the agent finished. Branch agent/x kept for inspection.");
+    });
+    await expect(failing).rejects.toThrow();
+    expect(log.events.at(-1)).toMatchObject({ type: "run.end", ok: false, costUsd: 4.98, turns: 60, category: "checks-failed" });
   });
 
   it("always writes run.end, with a failure category, and rethrows", async () => {

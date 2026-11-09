@@ -175,8 +175,8 @@ async function main(): Promise<void> {
           console.log(`\n✅ Pushed fix cycle ${result.cycle}. ${result.commentUrl}`);
           break;
       }
-      const { run: agentRun, ...summary } = "run" in result ? result : { ...result, run: undefined };
-      return { ...summary, ...(agentRun ? { costUsd: agentRun.costUsd, turns: agentRun.turns } : {}) };
+      const { run: _run, ...summary } = "run" in result ? result : { ...result, run: undefined };
+      return summary; // cost and turns come from the log's totals
     }
 
     const specFile = resolve(userCwd, positionals[0]!);
@@ -197,8 +197,8 @@ async function main(): Promise<void> {
     } else {
       console.log(`\n✅ Dry run passed on ${result.branch}. Changes are uncommitted. PR body would be:\n\n${result.body}`);
     }
-    const { run: agentRun, ...summary } = result;
-    return { ...summary, costUsd: agentRun.costUsd, turns: agentRun.turns };
+    const { run: _run, ...summary } = result;
+    return summary; // cost and turns come from the log's totals
   });
 }
 

@@ -19,6 +19,22 @@ export interface RunLog {
   event(event: RunEvent): void;
 }
 
+export interface RunTotals {
+  costUsd: number;
+  turns: number;
+}
+
+/** Cost and turns summed over every agent.end event, so run.end carries them even when the run fails. */
+export function totalsOf(events: Iterable<RunEvent>): RunTotals {
+  const totals = { costUsd: 0, turns: 0 };
+  for (const e of events) {
+    if (e.type !== "agent.end") continue;
+    totals.costUsd += typeof e.costUsd === "number" ? e.costUsd : 0;
+    totals.turns += typeof e.turns === "number" ? e.turns : 0;
+  }
+  return totals;
+}
+
 /**
  * Appends one JSON object per line to `<dir>/<runId>.jsonl`. Every string is redacted before it is
  * serialized, so the log can be uploaded and kept like any audit record. Writes are synchronous: a
@@ -27,28 +43,41 @@ export interface RunLog {
  */
 export class JsonlRunLog implements RunLog {
   readonly path: string;
+  private failed = false;
+  private ready = false;
+  private readonly agentEnds: RunEvent[] = [];
 
   constructor(
     readonly runId: string,
-    dir: string,
+    private readonly dir: string,
     private readonly secrets: string[],
     private readonly clock: () => Date = () => new Date(),
   ) {
-    mkdirSync(dir, { recursive: true });
     this.path = join(dir, `${runId}.jsonl`);
   }
 
-  private failed = false;
+  /** Totals so far, for run.end. Kept in memory, so they survive a log that can't be written. */
+  totals(): RunTotals {
+    return totalsOf(this.agentEnds);
+  }
 
   event(event: RunEvent): void {
+    if (event.type === "agent.end") this.agentEnds.push(event);
     try {
+      if (!this.ready) {
+        // Created on first use, inside the guard, so an unusable --log-dir can't fail the run. Owner-only
+        // modes: the transcript can hold sensitive code that redaction doesn't recognize, and the
+        // default location is a shared temp directory. (Windows ignores the modes.)
+        mkdirSync(this.dir, { recursive: true, mode: 0o700 });
+        this.ready = true;
+      }
       // Redact values before serializing: once escaped as JSON, a secret with a newline or a quote
       // (a PEM key, say) no longer matches its raw form.
       const line = JSON.stringify({ ts: this.clock().toISOString(), runId: this.runId, ...event }, (_key, value: unknown) => {
         if (value instanceof Error) return { name: value.name, message: redactSecrets(value.message, this.secrets) };
         return typeof value === "string" ? redactSecrets(value, this.secrets) : value;
       });
-      appendFileSync(this.path, `${line}\n`, "utf8");
+      appendFileSync(this.path, `${line}\n`, { encoding: "utf8", mode: 0o600 });
     } catch (error) {
       if (!this.failed) console.error(`⚠️ Could not write the audit log ${this.path}: ${error instanceof Error ? error.message : String(error)}`);
       this.failed = true;
@@ -62,7 +91,7 @@ export class JsonlRunLog implements RunLog {
  * Those two events are what metrics are built from: outcome, cost, turns and duration per run.
  */
 export async function withRunLog<T extends Record<string, unknown>>(
-  log: RunLog,
+  log: RunLog & { totals?(): RunTotals },
   start: Record<string, unknown>,
   fn: () => Promise<T>,
   clock: () => number = Date.now,
@@ -71,11 +100,13 @@ export async function withRunLog<T extends Record<string, unknown>>(
   log.event({ type: "run.start", ...start });
   try {
     const summary = await fn();
-    log.event({ type: "run.end", ok: true, durationMs: clock() - began, ...summary });
+    log.event({ type: "run.end", ok: true, durationMs: clock() - began, ...log.totals?.(), ...summary });
     return summary;
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
-    log.event({ type: "run.end", ok: false, durationMs: clock() - began, category: classifyFailure(message), error: message });
+    // Cost and turns too: the most expensive failures (a budget overrun, checks failing after a full
+    // run) are exactly the ones a cost dashboard must not miss.
+    log.event({ type: "run.end", ok: false, durationMs: clock() - began, ...log.totals?.(), category: classifyFailure(message), error: message });
     throw error;
   }
 }
