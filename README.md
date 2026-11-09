@@ -1,4 +1,104 @@
-# ai-code-review
+# ai-dev-automation
+
+**spec → agent writes the code → PR → AI review → agent fixes → human approves**
+
+```mermaid
+flowchart LR
+  spec["Spec<br/>(markdown)"] --> agent["Agent writes<br/>code + tests"]
+  agent --> pr["Pull request<br/>+ CI"]
+  pr --> review["AI review<br/>(a different model)"]
+  review -- "findings ≥ medium" --> fix["Agent fixes or declines<br/>(up to 5 cycles)"]
+  fix -- "push" --> review
+  review -- "only low findings, or none" --> human["Human approves<br/>and merges"]
+```
+
+AI coding agents are fast, but unattended they are hard to trust. This repo shows one way to make them trustworthy: the agent works from a written spec, guardrails enforced in code and checked in CI limit what it can do, a second model reviews every change, and a person still approves every merge.
+
+## See it run: [PR #5](https://github.com/gonzzza/ai-dev-automation/pull/5)
+
+The agent implemented [`specs/001-rate-limiter.md`](specs/001-rate-limiter.md) on its own, and the loop took it from there. The PR history shows every step:
+
+1. **The agent opened the PR:** a token bucket rate limiter with 22 tests, in 13 turns, for $0.74.
+2. **The AI review found a bug the agent's tests missed.** Refill stopped after the system clock stepped backwards.
+3. **Fix cycle 1 made it worse.** That run of the reviewer rated the clock bug *low*, so the agent wasn't asked to fix it. While adding the tests it was asked for, the agent wrote one that treated the bug as intended behavior. The loop's stop rule also misfired.
+4. **The design was fixed ([#8](https://github.com/gonzzza/ai-dev-automation/pull/8)).** The fixer now sees low findings as context it must not lock in, and the loop stops only when a finding comes back, not on a count.
+5. **Fix cycle 2 fixed the bug** and rewrote the wrong test, for $0.13.
+6. **The final review had one low finding left**, so the loop stopped and handed the PR to a human.
+
+That history is the point of the demo. The automation caught a real bug, made a mistake, and stayed bounded. Every step is visible on the PR for the person who decides.
+
+## What's in the repo
+
+| Path | What it is |
+|------|------------|
+| [`agent/`](agent) | The spec-driven agent, built on the [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk). It reads a spec, implements it with tests, verifies the result independently, and opens a PR. In fix mode it addresses review findings on its own PRs. |
+| [`review-action/`](review-action) | A GitHub Action that reviews a PR's diff with Claude and posts inline comments on bugs, security issues and missing tests. Other repositories can use it on its own. |
+| [`.github/workflows/`](.github/workflows) | CI (`npm run check`) and the AI review with the fix cycle, both running on this repo's own PRs. |
+| [`specs/`](specs) | Feature specs, the agent's input. [`specs/README.md`](specs/README.md) has the template. |
+| [`demo-app/`](demo-app) | A small TypeScript library the agent works on. |
+
+## Setup
+
+### Add the AI review to your repository
+
+The review action works on its own. Add an `ANTHROPIC_API_KEY` repository secret, then this workflow:
+
+```yaml
+# .github/workflows/ai-review.yml
+name: AI review
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+permissions:
+  contents: read
+  pull-requests: write
+jobs:
+  review:
+    if: ${{ !github.event.pull_request.draft }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: gonzzza/ai-dev-automation/review-action@v1
+        with:
+          anthropic-api-key: ${{ secrets.ANTHROPIC_API_KEY }}
+```
+
+The inputs (model, effort, `fail-on`, exclusions) are in [`review-action/README.md`](review-action/README.md).
+
+### Run the whole loop
+
+You need Node 24 or later, `git`, an authenticated [`gh`](https://cli.github.com/), and an Anthropic API key. Start with a fork, so the agent opens PRs on your copy.
+
+```sh
+git clone https://github.com/<you>/ai-dev-automation && cd ai-dev-automation
+npm ci
+npm run check                      # lint, typecheck and tests in every workspace
+
+export ANTHROPIC_API_KEY=sk-ant-...
+npm run agent -- specs/001-rate-limiter.md --dry-run   # implement and verify, no commit
+npm run agent -- specs/001-rate-limiter.md             # open the PR
+```
+
+The agent creates the branch `agent/001-rate-limiter`, so delete that branch first if it already exists. To write your own spec, copy the template in [`specs/README.md`](specs/README.md).
+
+To run the review and the fix cycle on the PR in CI, add two repository secrets:
+
+| Secret | Used for |
+|--------|----------|
+| `ANTHROPIC_API_KEY` | The review and the agent's fix cycle |
+| `AGENT_GITHUB_TOKEN` | The fix cycle's push and PR comment. A [fine-grained token](https://github.com/settings/personal-access-tokens/new) for this repository only, with *Contents* and *Pull requests* set to read and write. A push made with the workflow's own token wouldn't trigger the next review. |
+
+Without `AGENT_GITHUB_TOKEN`, the review still runs and only the fix cycle fails. On a fork, also enable GitHub Actions under the fork's **Actions** tab, since forks start with workflows disabled.
+
+## How it stays safe
+
+The agent runs unattended on input that might not be trustworthy, so its limits are enforced in code and unit tested. Its prompt alone doesn't enforce them.
+
+- **No shell.** The agent can read, write and search files, and it has one tool that runs `npm run check`. A permission hook decides every tool call. Writes are allowed only inside the target directory, never in the files that define how the checks run, and never in files that may hold credentials.
+- **Independent verification.** After the agent finishes, the harness re-runs the checks. It confirms that git's branch, commit, config and hooks are unchanged, that every changed file is in scope, and that nothing in the diff, PR body or comments looks like a credential. If any check fails, nothing is committed. CI then runs the checks again on a clean checkout.
+- **Bounded.** Each run has turn and budget limits. The fix cycle stops after 5 fix commits, or as soon as a finding comes back. It only touches the agent's own branches, and it never merges.
+- **Untrusted input stays data.** Specs, PR diffs and review findings reach the model as data, never as commands to run. The agent has no shell to run them with, and the review action executes nothing from model output. The workflows use least-privilege permissions.
+
+[`agent/README.md`](agent/README.md) has the full list, including what these defenses don't cover. Agent-written tests run on the machine, so the agent belongs in a container or CI job that holds only the secrets it needs.
 
 ## Why two models
 
@@ -28,3 +128,20 @@ The agent that writes the code and the action that reviews it run on different m
 - the human approval before every merge.
 
 The reviewer's findings are advice. The agent may decline a finding with a reason, and a person decides what ships.
+
+## Known limitations
+
+- **Reviewer severity varies between runs.** The same clock bug was rated medium, then low, then medium. The severity threshold decides which findings the agent attempts, not what is safe to merge; the human approval decides that.
+- **Not a sandbox.** Agent-written tests can reach the network and the file system of the machine they run on. In CI that's a short-lived runner holding a scoped token, but the boundary is the runner, not the agent.
+- **Cost figures are estimates.** The PR footers show the Agent SDK's estimate from token usage at list prices. The review's footer shows token counts only. The [Console](https://console.anthropic.com/settings/usage) has the actual bill.
+
+## Development
+
+```sh
+npm ci
+npm run check            # lint, typecheck and tests in every workspace: run before every commit
+npm test -w agent        # one workspace
+npm run build            # review-action bundles to dist/, which is committed
+```
+
+Tests are offline and fast. Git, GitHub, the clock and the Claude API are injected and faked, so `npm run check` never calls a real API. [`CLAUDE.md`](CLAUDE.md) has the conventions for people and coding agents working on the repo.
