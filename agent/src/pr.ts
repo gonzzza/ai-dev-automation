@@ -34,7 +34,7 @@ export function prBody({ spec, run, files, model, base, repoUrl }: PrContext): s
     report.plan.map((step, i) => `${i + 1}. ${step}`).join("\n"),
     "## Testing",
     report.testing,
-    "Verified by the harness after the agent finished: `npm run check` (lint, typecheck, all tests) passed.",
+    "Re-run locally by the harness after the agent finished: `npm run check` (lint, typecheck, all tests) passed. CI verifies again on a clean checkout.",
   ];
   if (report.notes.trim()) sections.push("## Notes for the reviewer", report.notes);
   sections.push(

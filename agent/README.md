@@ -39,7 +39,7 @@ spec.md ─▶ preflight ─▶ branch agent/<spec> ─▶ agent loop ─▶ npm
 1. **Preflight.** It must start on the base branch with a clean tree, so the PR contains only the agent's work. The branch must not exist locally or on `origin`.
 2. **Agent loop.** Claude gets the spec, the repo's `CLAUDE.md` for conventions, and a fixed toolset. It plans, implements, writes tests and iterates until the checks pass. It returns a structured report (plan, summary, testing, notes) that becomes the PR description.
 3. **Verification.** The harness doesn't take the agent's word for it:
-   1. It runs `npm run check` itself.
+   1. It runs `npm run check` itself. This is a fast local filter. Code that ran during the session could still tamper with gitignored files such as `node_modules`. The authoritative check is CI on the PR, which starts from a clean checkout and a fresh `npm ci`.
    2. It confirms that the branch, `HEAD`, git config and hooks are unchanged.
    3. It confirms that every changed file is inside `--scope` and none is a protected config file.
    4. It scans the changed files and the PR body for credentials.
@@ -55,7 +55,7 @@ The agent's tools are limited in code, so the limits don't depend on the model f
 - **Permission policy** ([`src/policy.ts`](src/policy.ts)). It runs as a `PreToolUse` hook, which sees every tool call. (`canUseTool` alone isn't enough, because Claude Code can approve reads inside the working directory without calling it.) The rules:
   - Reads are allowed only inside the repo. Symlinks are resolved first, and paths starting with `~` or containing `$` are denied, since the tools would expand them.
   - No path or glob may name a file that can hold credentials: `.env*` other than `.env.example`, `CLAUDE.local.md`, `.npmrc`, key files. This is a best-effort name check. A Grep across a whole directory relies on ripgrep skipping gitignored files, and the secret scan below backs it up.
-  - Writes are allowed only inside `--scope`, and never in `node_modules`, `.git`, or the files that define how the checks run (`package.json`, `tsconfig*.json`, Vitest and ESLint config). This stops the agent from turning the harness's own check into a no-op.
+  - Writes are allowed only inside `--scope`, and never in `node_modules`, `.git`, or the files that define how the checks run (`package.json`, `tsconfig*.json`, Vitest and ESLint config). Changes to those files can't reach the PR, so the PR's CI runs the project's real checks.
   - Every other call is denied. The reason goes back to the model so it can correct course.
 - **A minimal environment for the checks.** `run_checks` gets only an allowlist of variables that npm, Node and the OS need, such as `PATH`, `HOME` and `TEMP`. The API key, tokens and anything like `DATABASE_URL` are left out, and `gh` is logged out. From `.env`, the CLI reads only `ANTHROPIC_API_KEY`, never the rest of the file.
 - **Safer git after the run.** Every harness git command runs with hooks and fsmonitor disabled. The harness also refuses to continue if the checked-out branch or commit, the repo's git config (worktrees included) or its hooks changed during the run. That check also covers `.git/info/exclude` and index entries marked assume-unchanged or skip-worktree. A commit, an ignore rule or an index flag set by test code would otherwise hide files from the scope gate. `.gitattributes` and `.gitignore` are protected for the same reason. This closes the in-repo ways planted code could run during the commit and push.
