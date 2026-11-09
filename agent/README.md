@@ -101,7 +101,7 @@ From any line on `main`, `git log` leads to the run that wrote it, and from ther
 | `checks.result` | The harness's own re-run of `npm run check` |
 | `agent.end` | The SDK's result: outcome, cost, turns, duration |
 | `log` | The progress lines printed to the console |
-| `run.end` | Always written, even on failure. `ok`, duration and the outcome, or the error and a `category`: `preflight`, `agent-stopped`, `bad-report`, `checks-failed`, `git-state-changed`, `out-of-scope`, `secret-found` or `no-changes` |
+| `run.end` | Always written, even on failure. `ok`, duration and the outcome, or the error and a `category`: `config`, `bad-input`, `preflight`, `agent-stopped`, `bad-report`, `checks-failed`, `git-state-changed`, `out-of-scope`, `secret-found` or `no-changes` |
 
 - **Redaction.** Every line is redacted before it's written: credential values from the environment, and anything matching a known key format, become `[REDACTED]`.
 - **Location.** The log lives outside the repository, where the agent's tools can't read it.

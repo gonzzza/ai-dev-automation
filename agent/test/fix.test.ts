@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { classifyFailure } from "../src/runlog.js";
 import type { AgentRun } from "../src/agent.js";
 import {
   decideFix,
@@ -321,5 +322,27 @@ describe("runFixCycle", () => {
     const leaky = setup({ agentReport: report({ summary: "Used key sk-test-value-from-the-env" }) });
     await expect(runFixCycle(leaky.deps)).rejects.toThrow("Possible secret in the commit message");
     expect(leaky.git.push).not.toHaveBeenCalled();
+  });
+});
+
+describe("failure categories for the fix cycle", () => {
+  // Against the errors runFixCycle really throws, like the pipeline's test, so wording drift breaks a test.
+  it.each([
+    [{ pr: { state: "MERGED" } }, "preflight"],
+    [{ pr: { isCrossRepository: true } }, "preflight"],
+    [{ pr: { headRefName: "feature/x" }, branch: "feature/x" }, "preflight"],
+    [{ branch: "main" }, "preflight"],
+    [{ head: "old999" }, "preflight"],
+    [{ tamperGit: true, changed: [] as string[] }, "git-state-changed"],
+    [{ changed: ["agent/src/policy.ts"] }, "out-of-scope"],
+    [{ agentReport: report({ summary: "Used key sk-test-value-from-the-env" }) }, "secret-found"],
+  ])("classifies the failure for %o as %s", async (options, category) => {
+    const { deps } = setup(options);
+    const error = await runFixCycle(deps).then(
+      () => undefined,
+      (e: unknown) => e as Error,
+    );
+    expect(error).toBeInstanceOf(Error);
+    expect(classifyFailure(error!.message)).toBe(category);
   });
 });

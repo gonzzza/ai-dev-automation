@@ -20,9 +20,10 @@ export interface RunLog {
 }
 
 /**
- * Appends one JSON object per line to `<dir>/<runId>.jsonl`. Each line is redacted before it is
- * written, so the log can be uploaded and kept like any audit record. Writes are synchronous: a run
- * that crashes still leaves everything up to the crash on disk.
+ * Appends one JSON object per line to `<dir>/<runId>.jsonl`. Every string is redacted before it is
+ * serialized, so the log can be uploaded and kept like any audit record. Writes are synchronous: a
+ * run that crashes still leaves everything up to the crash on disk. Logging never fails the run: a
+ * write error is reported once on stderr and the run carries on.
  */
 export class JsonlRunLog implements RunLog {
   readonly path: string;
@@ -37,15 +38,22 @@ export class JsonlRunLog implements RunLog {
     this.path = join(dir, `${runId}.jsonl`);
   }
 
-  event(event: RunEvent): void {
-    const line = JSON.stringify({ ts: this.clock().toISOString(), runId: this.runId, ...event }, jsonSafe);
-    appendFileSync(this.path, `${redactSecrets(line, this.secrets)}\n`, "utf8");
-  }
-}
+  private failed = false;
 
-/** Errors serialize to {} by default; keep their message. */
-function jsonSafe(_key: string, value: unknown): unknown {
-  return value instanceof Error ? { name: value.name, message: value.message } : value;
+  event(event: RunEvent): void {
+    try {
+      // Redact values before serializing: once escaped as JSON, a secret with a newline or a quote
+      // (a PEM key, say) no longer matches its raw form.
+      const line = JSON.stringify({ ts: this.clock().toISOString(), runId: this.runId, ...event }, (_key, value: unknown) => {
+        if (value instanceof Error) return { name: value.name, message: redactSecrets(value.message, this.secrets) };
+        return typeof value === "string" ? redactSecrets(value, this.secrets) : value;
+      });
+      appendFileSync(this.path, `${line}\n`, "utf8");
+    } catch (error) {
+      if (!this.failed) console.error(`⚠️ Could not write the audit log ${this.path}: ${error instanceof Error ? error.message : String(error)}`);
+      this.failed = true;
+    }
+  }
 }
 
 /**
@@ -73,6 +81,8 @@ export async function withRunLog<T extends Record<string, unknown>>(
 }
 
 export type FailureCategory =
+  | "config"
+  | "bad-input"
   | "preflight"
   | "agent-stopped"
   | "bad-report"
@@ -97,6 +107,8 @@ export function classifyFailure(message: string): FailureCategory {
     [/^Possible secret in/, "secret-found"],
     [/^The agent made no changes/, "no-changes"],
     [/^(Check out |Working tree is not clean|Branch .* already exists|PR #\d+ |Local .* is at )/, "preflight"],
+    [/^(Set ANTHROPIC_API_KEY|Invalid --|--\S+ )/, "config"],
+    [/^Findings (are not valid JSON|do not match)|: (spec must|spec is missing|file name must)|^ENOENT: /, "bad-input"],
   ];
   return rules.find(([pattern]) => pattern.test(message))?.[1] ?? "other";
 }
