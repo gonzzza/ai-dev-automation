@@ -1,6 +1,6 @@
 import type { AgentRun } from "./agent.js";
 import { scanForSecrets, verifyChanges, type GateDeps } from "./gates.js";
-import { branchName, commitMessage, prBody, prTitle } from "./pr.js";
+import { branchName, commitMessage, prBody, prTitle, type PrStandards } from "./pr.js";
 import type { Spec } from "./spec.js";
 
 /** The git operations the pipeline needs; implemented by Git, faked in tests. */
@@ -25,6 +25,8 @@ export interface PipelineDeps extends GateDeps {
   dryRun: boolean;
   /** Goes into the commit trailer and the PR body, to trace the PR back to its audit log. */
   runId?: string;
+  /** The org standards the agent was given, listed in the PR body. */
+  standards?: PrStandards;
   runAgent(spec: Spec): Promise<AgentRun>;
 }
 
@@ -57,7 +59,7 @@ export async function runPipeline(deps: PipelineDeps): Promise<PipelineResult> {
   log(`Agent finished in ${run.turns} turns, $${run.costUsd.toFixed(2)}.`);
 
   const files = await verifyChanges(deps, branch, gitStateBefore);
-  const body = prBody({ spec, run, files, model: deps.model, base, repoUrl: await git.repoUrl(), runId: deps.runId });
+  const body = prBody({ spec, run, files, model: deps.model, base, repoUrl: await git.repoUrl(), runId: deps.runId, standards: deps.standards });
 
   await scanForSecrets(deps, branch, [["the PR body", body]], files);
   if (deps.dryRun) return { status: "dry-run", branch, files, body, run };

@@ -80,3 +80,48 @@ describe("selectStandards", () => {
     expect(() => selectStandards([], { use: "review", paths: [], maxChars })).toThrow(RangeError);
   });
 });
+
+// Spec 003: the agent selects without paths, since it can't know which files it will create.
+describe("selectStandards without paths", () => {
+  it("AC1: keeps every standard for the requested use, whatever its applies_to", () => {
+    const standards = [
+      standard({ id: "TS-1", appliesTo: ["**/src/**/*.ts"] }),
+      standard({ id: "TS-2", appliesTo: ["**/*.py"] }),
+      standard({ id: "TS-3" }),
+      standard({ id: "TS-4", use: ["review"], appliesTo: ["**/*.ts"] }),
+      standard({ id: "TS-5", use: ["agent"] }),
+    ];
+    const { selected, dropped } = selectStandards(standards, { use: "agent", maxChars: BIG });
+    expect(ids(selected)).toEqual(["TS-1", "TS-2", "TS-3", "TS-5"]);
+    expect(dropped).toEqual([]);
+  });
+
+  it("AC1: an empty paths list still checks applies_to, as before", () => {
+    const standards = [standard({ id: "TS-1", appliesTo: ["**/*.ts"] }), standard({ id: "TS-2" })];
+    expect(ids(selectStandards(standards, { use: "agent", paths: [], maxChars: BIG }).selected)).toEqual(["TS-2"]);
+  });
+
+  it("AC1: orders by severity, most severe first, then by id", () => {
+    const standards = [
+      standard({ id: "TS-10", severity: "high", appliesTo: ["**/*.py"] }),
+      standard({ id: "A-1", severity: "low" }),
+      standard({ id: "TS-2", severity: "high", appliesTo: ["docs/**"] }),
+      standard({ id: "SEC-1", severity: "critical", appliesTo: ["**/*.ts"] }),
+    ];
+    expect(ids(selectStandards(standards, { use: "agent", maxChars: BIG }).selected)).toEqual(["SEC-1", "TS-2", "TS-10", "A-1"]);
+  });
+
+  it("AC1: drops from the least severe end until the selection fits maxChars", () => {
+    const critical = standard({ id: "C-1", severity: "critical", appliesTo: ["**/*.py"], body: "x".repeat(100) });
+    const high = standard({ id: "H-1", severity: "high", appliesTo: ["docs/**"], body: "x".repeat(100) });
+    const low = standard({ id: "L-1", severity: "low", body: "x".repeat(100) });
+    const size = standardSize(critical);
+    const { selected, dropped } = selectStandards([low, high, critical], { use: "agent", maxChars: size * 2 });
+    expect(ids(selected)).toEqual(["C-1", "H-1"]);
+    expect(ids(dropped)).toEqual(["L-1"]);
+  });
+
+  it.each([0, -1, 1.5, Number.NaN])("AC1: throws RangeError for maxChars %s", (maxChars) => {
+    expect(() => selectStandards([], { use: "agent", maxChars })).toThrow(RangeError);
+  });
+});

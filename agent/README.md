@@ -30,6 +30,10 @@ Requires `git` and an authenticated [`gh`](https://cli.github.com/).
 | `--log-dir <dir>` | `<tmp>/spec-agent-runs` | Where the run's [audit log](#audit-log-and-monitoring) goes. |
 | `--sandbox <kind>` | `none` | Where agent-written tests run: `none` (this machine, with a credential-free environment) or `docker` (an isolated container; see [the sandbox](#the-checks-sandbox)). CI uses `docker`. |
 | `--sandbox-image <image>` | `node:24-bookworm` | Image for `--sandbox docker`. Keep it on the Node version in `.nvmrc`. |
+| `--standards <dir>` | none | [Org standards](#org-standards) directory. Absent means no standards. |
+| `--standards-packs <list>` | all | Comma-separated packs to load from `--standards`. |
+| `--standards-ref <label>` | none | Version label of the standards (a tag or SHA), for the audit log and the PR body. |
+| `--max-standards-chars <n>` | `40000` | Size budget for the standards. The least severe ones that don't fit are dropped and listed. |
 
 ## How it works
 
@@ -49,6 +53,21 @@ spec.md ─▶ preflight ─▶ branch agent/<spec> ─▶ agent loop ─▶ npm
 
    If any of these fails, nothing is committed and the branch is kept for inspection.
 4. **PR.** Commit, push and `gh pr create`. CI and the AI review run on it. A human approves and merges.
+
+## Org standards
+
+The [AI review](../review-action) checks PRs against the org engineering standards (see [`standards/`](../standards) and spec 002). With `--standards <dir>`, the agent gets the same standards up front, in spec runs and fix runs, so the code it writes already follows the rules the review enforces instead of spending a fix cycle on them.
+
+```sh
+npm run agent -- specs/004-x.md --standards ../org-standards --standards-packs typescript,testing --standards-ref v1.2.0
+```
+
+- **Which standards.** Every standard marked `use: agent` in the selected packs, most severe first. `applies_to` isn't used to filter, since the agent can't know up front which files it will create; each standard is shown with its globs (or `all files`) and the agent applies it to the files they match, code and tests alike. If the standards are over `--max-standards-chars`, the least severe ones are dropped.
+- **Trusted operator input, in the system prompt.** The standards come from whoever runs the agent, not from the spec or the PR, so they are appended to the system prompt. The spec body and the review findings stay in the user prompt as untrusted input.
+- **They win over a conflicting spec or finding.** The agent is told to follow the standard and explain the conflict in its `notes`, which end up in the PR body or the fix-cycle comment for the human.
+- **Recorded.** The CLI prints the ids it loaded and any it dropped. The audit log gets a `standards.loaded` event with the path, ref, packs, and the checked and dropped ids. The PR body gets a `## Standards` section with the same ids and the ref.
+- A missing directory, an unknown pack or an invalid standard file stops the run before any git or agent work.
+- The review stays the check: the agent is not verified against the standards by the harness.
 
 ## Fix cycle
 
@@ -100,6 +119,7 @@ From any line on `main`, `git log` leads to the run that wrote it, and from ther
 |-------|----------|
 | `run.start` | Mode, command-line arguments, Node version, and the CI run link when in Actions. Written first, before anything can fail. |
 | `run.config` | The commit it started from, model, effort, writable directories, turn and budget limits |
+| `standards.loaded` | With `--standards`: the directory, ref, packs, and the ids given to the agent (`checked`) and dropped for size |
 | `spec.input` / `fix.input` | The spec (path, base branch, body), or the PR number, reviewed commit, threshold, cycle limit and findings |
 | `agent.start` | The full prompt sent to the model |
 | `sdk.message` | Every message of the session: the model's turns, tool calls and tool results. This is the transcript. |
@@ -218,6 +238,7 @@ Tests cover:
 - the permission policy;
 - the secret handling;
 - the pipeline gates;
+- the org standards: loading from fixtures, the system prompt they produce, and the PR body section;
 - the fix cycle: findings parsing, the cycle limit and progress rules, and its gates;
 - the audit log: redaction, run ids and trailers, and failure categories checked against the errors the real gates throw.
 

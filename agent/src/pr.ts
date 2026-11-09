@@ -31,9 +31,24 @@ export interface PrContext {
   /** e.g. "https://github.com/o/r". Links are plain text without it. */
   repoUrl?: string;
   runId?: string;
+  /** The org standards the agent was given, if any. */
+  standards?: PrStandards;
 }
 
-export function prBody({ spec, run, files, model, base, repoUrl, runId }: PrContext): string {
+export interface PrStandards {
+  checked: string[];
+  dropped: string[];
+  ref?: string;
+}
+
+function standardsSection({ checked, dropped, ref }: PrStandards): string[] {
+  const lines = [`- Given to the agent: ${checked.length ? checked.map((id) => `\`${id}\``).join(", ") : "none"}`];
+  if (ref) lines.push(`- Version: \`${ref}\``);
+  if (dropped.length) lines.push(`- Not given to the agent (over the size budget): ${dropped.map((id) => `\`${id}\``).join(", ")}`);
+  return ["## Standards", lines.join("\n")];
+}
+
+export function prBody({ spec, run, files, model, base, repoUrl, runId, standards }: PrContext): string {
   const { report } = run;
   const link = (text: string, path: string, kind: "blob" | "tree") =>
     repoUrl ? `[${text}](${repoUrl}/${kind}/${base}/${path})` : text;
@@ -49,6 +64,7 @@ export function prBody({ spec, run, files, model, base, repoUrl, runId }: PrCont
     "Re-run locally by the harness after the agent finished: `npm run check` (lint, typecheck, all tests) passed. CI verifies again on a clean checkout.",
   ];
   if (report.notes.trim()) sections.push("## Notes for the reviewer", report.notes);
+  if (standards) sections.push(...standardsSection(standards));
   sections.push(
     "## Files changed",
     files.map((f) => `- \`${f}\``).join("\n"),

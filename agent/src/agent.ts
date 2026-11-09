@@ -8,6 +8,8 @@ import type { Exec } from "./exec.js";
 import type { RunLog } from "./runlog.js";
 import { AGENT_TOOLS, CHECKS_TOOL, createPolicyHook, createToolPolicy } from "./policy.js";
 import type { Spec } from "./spec.js";
+import { systemPromptOption } from "./standards.js";
+import type { Standard } from "standards";
 
 export const AgentReportSchema = z.object({
   plan: z.array(z.string()).describe("The steps you planned, in order, one short sentence each."),
@@ -34,6 +36,8 @@ export interface AgentConfig {
   sandbox?: Sandbox;
   /** Audit log: every SDK message (the transcript) and every policy decision. */
   runLog?: RunLog;
+  /** Org standards, appended to the system prompt. Trusted operator input, unlike the spec and findings. */
+  standards?: Standard[];
 }
 
 export interface AgentRun<Report = AgentReport> {
@@ -107,7 +111,9 @@ export async function runAgent<Report>(
     maxBudgetUsd: config.maxBudgetUsd,
     // Load the repo's CLAUDE.md for conventions; skip user and local settings so runs are reproducible.
     settingSources: ["project"],
-    systemPrompt: { type: "preset", preset: "claude_code" },
+    // The standards come from the operator and are trusted, so they go in the system prompt. The
+    // spec body and findings stay in the user prompt, as untrusted input.
+    systemPrompt: systemPromptOption(config.standards ?? []),
     tools: AGENT_TOOLS,
     mcpServers: { repo: createChecksServer(exec, config.repoRoot, config.checksEnv, config.sandbox) },
     // The policy runs as a PreToolUse hook, which sees every tool call, and again as canUseTool for

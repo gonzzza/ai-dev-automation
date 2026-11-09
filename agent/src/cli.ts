@@ -14,6 +14,7 @@ import { runPipeline } from "./pipeline.js";
 import { JsonlRunLog, newRunId, withRunLog } from "./runlog.js";
 import { checksEnv, secretValues } from "./secrets.js";
 import { parseSpec } from "./spec.js";
+import { loadAgentStandards } from "./standards.js";
 
 const USAGE = `Usage: npm run agent -- <spec.md> [options]
        npm run agent -- --fix-pr <number> --findings <file.json> [options]
@@ -30,6 +31,12 @@ Options:
   --sandbox <kind>    Where agent-written tests run: none (this machine, credential-free env) or
                       docker (container: no network, no secrets, read-only .git). Default: none
   --sandbox-image <i> Image for --sandbox docker. Default: ${DEFAULT_SANDBOX_IMAGE}
+
+Org standards (given to the agent in its system prompt, in spec and fix runs):
+  --standards <dir>            Standards directory. Absent: no standards
+  --standards-packs <list>     Comma-separated packs. Default: all
+  --standards-ref <label>      Version label (a tag or SHA) for the log and the PR body
+  --max-standards-chars <n>    Size budget for the standards. Default: 40000
 
 Fix cycle (run on a checked-out agent/* PR branch):
   --fix-pr <number>      Address the AI review's findings on this PR, commit and push
@@ -52,6 +59,10 @@ async function main(): Promise<void> {
       "log-dir": { type: "string", default: join(tmpdir(), "spec-agent-runs") },
       sandbox: { type: "string", default: "none" },
       "sandbox-image": { type: "string", default: DEFAULT_SANDBOX_IMAGE },
+      standards: { type: "string" },
+      "standards-packs": { type: "string" },
+      "standards-ref": { type: "string" },
+      "max-standards-chars": { type: "string", default: "40000" },
       "fix-pr": { type: "string" },
       findings: { type: "string" },
       "reviewed-sha": { type: "string" },
@@ -117,6 +128,21 @@ async function main(): Promise<void> {
       sandbox,
       runLog,
     };
+    // Loaded once, before any git or agent work, so a bad standards directory fails fast. Spec runs
+    // and fix runs both get them through config.
+    const standards = await loadAgentStandards(
+      {
+        path: values.standards === undefined || values.standards === "" ? undefined : resolve(userCwd, values.standards),
+        packs: (values["standards-packs"] ?? "").split(",").map((p) => p.trim()).filter(Boolean),
+        ref: values["standards-ref"],
+        maxChars: Number(values["max-standards-chars"]),
+      },
+      runLog,
+    );
+    if (standards) {
+      config.standards = standards.standards;
+      say(`Standards: ${standards.checked.join(", ") || "none"}${standards.dropped.length ? `; dropped: ${standards.dropped.join(", ")}` : ""}`);
+    }
     await assertSandboxAvailable(exec, sandbox, config.checksEnv);
     // Dependencies for the container's platform, installed once per lockfile, before the agent runs.
     config.sandbox = await prepareSandbox(exec, repoRoot, sandbox, {
@@ -212,6 +238,7 @@ async function main(): Promise<void> {
       model: config.model,
       dryRun: values["dry-run"],
       runId: runLog.runId,
+      standards: standards && { checked: standards.checked, dropped: standards.dropped, ...(standards.ref !== undefined ? { ref: standards.ref } : {}) },
       runAgent: async (s) => runAgent(await specTask(s, config.writableDirs), config, exec),
     });
     if (result.status === "opened") {
