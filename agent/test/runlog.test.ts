@@ -1,4 +1,4 @@
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -67,6 +67,22 @@ describe("JsonlRunLog", () => {
     log.event({ type: "log", line: "x" });
     expect(statSync(join(dir, "logs")).mode & 0o777).toBe(0o700);
     expect(statSync(log.path).mode & 0o777).toBe(0o600);
+  });
+
+  it.skipIf(process.platform === "win32")("refuses an existing log dir that others can access, without failing the run", () => {
+    dir = mkdtempSync(join(tmpdir(), "runlog-test-"));
+    const shared = join(dir, "shared");
+    mkdirSync(shared, { mode: 0o777 });
+    chmodSync(shared, 0o777); // as if another user had created it first
+    const warn = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const log = new JsonlRunLog("run-1", shared, []);
+      log.event({ type: "log", line: "x" });
+      expect(existsSync(log.path)).toBe(false);
+      expect(warn.mock.calls[0]![0]).toContain("no group or other access");
+    } finally {
+      warn.mockRestore();
+    }
   });
 
   it("never fails the run when the log can't be written, and warns once", () => {

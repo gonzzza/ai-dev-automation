@@ -1,5 +1,5 @@
 import { randomBytes } from "node:crypto";
-import { appendFileSync, mkdirSync } from "node:fs";
+import { appendFileSync, mkdirSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { redactSecrets } from "./secrets.js";
 
@@ -69,6 +69,15 @@ export class JsonlRunLog implements RunLog {
         // modes: the transcript can hold sensitive code that redaction doesn't recognize, and the
         // default location is a shared temp directory. (Windows ignores the modes.)
         mkdirSync(this.dir, { recursive: true, mode: 0o700 });
+        // mkdirSync keeps an existing directory as it is, and the default path is predictable, so
+        // someone else on a shared machine could have created it first. Refuse one we don't own
+        // exclusively. (Windows reports neither owner nor POSIX modes, so the check is POSIX-only.)
+        if (process.platform !== "win32") {
+          const stat = statSync(this.dir);
+          if (stat.uid !== process.getuid?.() || (stat.mode & 0o077) !== 0) {
+            throw new Error(`${this.dir} must be owned by this user with no group or other access (chmod 700).`);
+          }
+        }
         this.ready = true;
       }
       // Redact values before serializing: once escaped as JSON, a secret with a newline or a quote
