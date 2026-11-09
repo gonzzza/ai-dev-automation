@@ -16,9 +16,18 @@ flowchart LR
 
 AI coding agents are fast, but unattended they are hard to trust. This repo shows one way to make them trustworthy: the agent works from a written spec, guardrails enforced in code and checked in CI limit what it can do, a second model reviews every change, and a person still approves every merge.
 
-## See it run: [PR #5](https://github.com/gonzzza/ai-dev-automation/pull/5)
+## See it run: [PR #17](https://github.com/gonzzza/ai-dev-automation/pull/17)
 
-The agent implemented [`specs/001-rate-limiter.md`](specs/001-rate-limiter.md) on its own, and the loop took it from there. The PR history shows every step:
+The agent implemented [`specs/001-rate-limiter.md`](specs/001-rate-limiter.md) on its own, and the loop took it from there. This run gave the agent the [org standards](#org-standards) up front, the same ones the review checks:
+
+1. **The agent opened the PR:** a token bucket rate limiter with tests for every acceptance criterion, each test named after its criterion ID, in 15 turns, for $0.85.
+2. **The AI review checked all five standards** and found one medium gap: no test for two `acquire` calls racing for the same tokens.
+3. **Fix cycle 1 added that test**, for $0.18.
+4. **The final review had one low finding left**, so the loop stopped and handed the PR to a human.
+
+### The first run: [PR #5](https://github.com/gonzzza/ai-dev-automation/pull/5)
+
+The same spec, before the agent had standards or the spec had criterion IDs. It's closed now, superseded by #17, and kept as the record of how the loop got here:
 
 1. **The agent opened the PR:** a token bucket rate limiter with 22 tests, in 13 turns, for $0.74.
 2. **The AI review found a bug the agent's tests missed.** Refill stopped after the system clock stepped backwards.
