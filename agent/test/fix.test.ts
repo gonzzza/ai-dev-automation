@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
+import { classifyFailure } from "../src/runlog.js";
 import type { AgentRun } from "../src/agent.js";
 import {
   decideFix,
@@ -231,6 +232,8 @@ function setup({
 describe("runFixCycle", () => {
   it("fixes the actionable findings, verifies, commits with trailers, pushes and comments", async () => {
     const { deps, git } = setup({ trailers: "\0" });
+    deps.runId = "run-7";
+    deps.runLink = "https://github.com/o/r/actions/runs/42";
     const result = await runFixCycle(deps);
 
     expect(result).toMatchObject({ status: "fixed", cycle: 1 });
@@ -243,6 +246,8 @@ describe("runFixCycle", () => {
     expect(git.push).toHaveBeenCalledWith("agent/001-rate-limiter");
 
     const comment = git.commentOnPullRequest.mock.calls[0]![1];
+    expect(message).toMatch(/\nAgent-Run: run-7\n$/);
+    expect(comment).toContain("· run [run-7](https://github.com/o/r/actions/runs/42) · a human approves the merge</sub>");
     expect(comment).toContain("**Fix cycle 1 of 5.**");
     expect(comment).toContain("✅ Fixed · medium: Backwards clock jump freezes refill");
     expect(comment).toContain("**Left for human review:**\n\n- low: No concurrency test (`demo-app/src/rate-limiter.ts:73`)");
@@ -317,5 +322,27 @@ describe("runFixCycle", () => {
     const leaky = setup({ agentReport: report({ summary: "Used key sk-test-value-from-the-env" }) });
     await expect(runFixCycle(leaky.deps)).rejects.toThrow("Possible secret in the commit message");
     expect(leaky.git.push).not.toHaveBeenCalled();
+  });
+});
+
+describe("failure categories for the fix cycle", () => {
+  // Against the errors runFixCycle really throws, like the pipeline's test, so wording drift breaks a test.
+  it.each([
+    [{ pr: { state: "MERGED" } }, "preflight"],
+    [{ pr: { isCrossRepository: true } }, "preflight"],
+    [{ pr: { headRefName: "feature/x" }, branch: "feature/x" }, "preflight"],
+    [{ branch: "main" }, "preflight"],
+    [{ head: "old999" }, "preflight"],
+    [{ tamperGit: true, changed: [] as string[] }, "git-state-changed"],
+    [{ changed: ["agent/src/policy.ts"] }, "out-of-scope"],
+    [{ agentReport: report({ summary: "Used key sk-test-value-from-the-env" }) }, "secret-found"],
+  ])("classifies the failure for %o as %s", async (options, category) => {
+    const { deps } = setup(options);
+    const error = await runFixCycle(deps).then(
+      () => undefined,
+      (e: unknown) => e as Error,
+    );
+    expect(error).toBeInstanceOf(Error);
+    expect(classifyFailure(error!.message)).toBe(category);
   });
 });

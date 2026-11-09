@@ -3,8 +3,19 @@ import type { Spec } from "./spec.js";
 
 export const branchName = (spec: Spec): string => `agent/${spec.slug}`;
 
-export function commitMessage(spec: Spec, run: AgentRun): string {
-  return `${spec.title}\n\nImplements ${spec.path}.\n\n${run.report.summary}\n`;
+/** Trailer that ties a commit to the run, and its audit log, that produced it. */
+export const RUN_TRAILER = "Agent-Run";
+
+export function commitMessage(spec: Spec, run: AgentRun, runId?: string): string {
+  const trailer = runId ? `\n${RUN_TRAILER}: ${runId}\n` : "";
+  return `${spec.title}\n\nImplements ${spec.path}.\n\n${run.report.summary}\n${trailer}`;
+}
+
+/** The footer line shared by the PR body and the fix-cycle comments. */
+export function runFooter(model: string, run: AgentRun<unknown>, { runId, runLink }: { runId?: string; runLink?: string } = {}): string {
+  const parts = [model, `${run.turns} turns`, `${Math.round(run.durationMs / 1000)}s`, `$${run.costUsd.toFixed(2)}`];
+  if (runId) parts.push(runLink ? `run [${runId}](${runLink})` : `run ${runId}`);
+  return `<sub>${parts.join(" · ")}</sub>`;
 }
 
 export function prTitle(spec: Spec): string {
@@ -19,9 +30,10 @@ export interface PrContext {
   base: string;
   /** e.g. "https://github.com/o/r". Links are plain text without it. */
   repoUrl?: string;
+  runId?: string;
 }
 
-export function prBody({ spec, run, files, model, base, repoUrl }: PrContext): string {
+export function prBody({ spec, run, files, model, base, repoUrl, runId }: PrContext): string {
   const { report } = run;
   const link = (text: string, path: string, kind: "blob" | "tree") =>
     repoUrl ? `[${text}](${repoUrl}/${kind}/${base}/${path})` : text;
@@ -40,7 +52,7 @@ export function prBody({ spec, run, files, model, base, repoUrl }: PrContext): s
   sections.push(
     "## Files changed",
     files.map((f) => `- \`${f}\``).join("\n"),
-    `<sub>${model} · ${run.turns} turns · ${Math.round(run.durationMs / 1000)}s · $${run.costUsd.toFixed(2)}</sub>`,
+    runFooter(model, run, { runId }),
     "🤖 Generated with [Claude Code](https://claude.com/claude-code)",
   );
   return sections.join("\n\n");

@@ -3,6 +3,7 @@ import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { fillTemplate, type AgentRun, type AgentTask } from "./agent.js";
 import { scanForSecrets, verifyChanges, type GateDeps } from "./gates.js";
+import { RUN_TRAILER, runFooter } from "./pr.js";
 
 export const SEVERITIES = ["low", "medium", "high", "critical"] as const;
 export type Severity = (typeof SEVERITIES)[number];
@@ -198,9 +199,10 @@ export async function loadFixTemplate(path: string = FIX_PROMPT_FILE): Promise<s
   return readFile(path, "utf8");
 }
 
-export function fixCommitMessage(cycle: number, actionable: Finding[], report: FixReport): string {
+export function fixCommitMessage(cycle: number, actionable: Finding[], report: FixReport, runId?: string): string {
   const addressed = actionable.map((f) => `${ADDRESSED_TRAILER}: ${trailerWord(f.category)} ${f.line} ${oneLine(f.path)}`);
-  return `Address AI review findings (fix cycle ${cycle})\n\n${report.summary}\n\n${[`${CYCLE_TRAILER}: ${cycle}`, ...addressed].join("\n")}\n`;
+  const trailers = [`${CYCLE_TRAILER}: ${cycle}`, ...addressed, ...(runId ? [`${RUN_TRAILER}: ${runId}`] : [])];
+  return `Address AI review findings (fix cycle ${cycle})\n\n${report.summary}\n\n${trailers.join("\n")}\n`;
 }
 
 /** Collapses model text to one line so it can't break the comment's list structure. */
@@ -213,7 +215,15 @@ function deferredSection(deferred: Finding[]): string[] {
 }
 
 export function fixComment(
-  { cycle, maxCycles, actionable, deferred, model }: { cycle: number; maxCycles: number; actionable: Finding[]; deferred: Finding[]; model: string },
+  {
+    cycle,
+    maxCycles,
+    actionable,
+    deferred,
+    model,
+    runId,
+    runLink,
+  }: { cycle: number; maxCycles: number; actionable: Finding[]; deferred: Finding[]; model: string; runId?: string; runLink?: string },
   run: AgentRun<FixReport>,
   committed: boolean,
 ): string {
@@ -232,7 +242,7 @@ export function fixComment(
       ? "Pushed as one commit; the AI review runs again on it. The harness re-ran `npm run check` before committing."
       : "Nothing was committed, so the cycle ends here. A human should review the declined findings.",
     ...deferredSection(deferred),
-    `<sub>${model} · ${run.turns} turns · ${Math.round(run.durationMs / 1000)}s · $${run.costUsd.toFixed(2)} · a human approves the merge</sub>`,
+    runFooter(model, run, { runId, runLink }).replace("</sub>", " · a human approves the merge</sub>"),
   );
   return sections.join("\n\n");
 }
@@ -276,6 +286,9 @@ export interface FixDeps extends GateDeps {
   minSeverity: Severity;
   maxCycles: number;
   model: string;
+  /** Goes into the commit trailer and the PR comment; `runLink` points at the CI run that holds the log. */
+  runId?: string;
+  runLink?: string;
   /** Runs the agent on the findings, with the deferred ones as context, on `branch` (whose name gives the spec). */
   runAgent(findings: Finding[], deferred: Finding[], branch: string): Promise<AgentRun<FixReport>>;
 }
@@ -335,7 +348,7 @@ export async function runFixCycle(deps: FixDeps): Promise<FixResult> {
   if ((await git.fingerprint()) !== gitStateBefore) {
     throw new Error(`The git state (HEAD, branch, .git/config or hooks) changed during the run. Nothing was committed; inspect ${branch}.`);
   }
-  const context = { cycle, maxCycles: deps.maxCycles, actionable, deferred, model: deps.model };
+  const context = { cycle, maxCycles: deps.maxCycles, actionable, deferred, model: deps.model, runId: deps.runId, runLink: deps.runLink };
 
   // No changes is a valid outcome, whether the agent declined every finding or found the code already
   // handles them: say why on the PR and end the cycle without a commit.
@@ -346,7 +359,7 @@ export async function runFixCycle(deps: FixDeps): Promise<FixResult> {
   }
 
   const files = await verifyChanges(deps, branch, gitStateBefore);
-  const message = fixCommitMessage(cycle, actionable, run.report);
+  const message = fixCommitMessage(cycle, actionable, run.report, deps.runId);
   const body = fixComment(context, run, true);
   await scanForSecrets(deps, branch, [["the commit message", message], ["the PR comment", body]], files);
 

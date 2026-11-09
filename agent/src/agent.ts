@@ -5,6 +5,7 @@ import { query, type Options, type SDKMessage } from "@anthropic-ai/claude-agent
 import { z } from "zod";
 import { createChecksServer } from "./checks.js";
 import type { Exec } from "./exec.js";
+import type { RunLog } from "./runlog.js";
 import { AGENT_TOOLS, CHECKS_TOOL, createPolicyHook, createToolPolicy } from "./policy.js";
 import type { Spec } from "./spec.js";
 
@@ -29,6 +30,8 @@ export interface AgentConfig {
   maxBudgetUsd: number;
   /** Environment for run_checks, without credentials. */
   checksEnv?: NodeJS.ProcessEnv;
+  /** Audit log: every SDK message (the transcript) and every policy decision. */
+  runLog?: RunLog;
 }
 
 export interface AgentRun<Report = AgentReport> {
@@ -108,17 +111,37 @@ export async function runAgent<Report>(
     // The policy runs as a PreToolUse hook, which sees every tool call, and again as canUseTool for
     // anything Claude Code would otherwise prompt for. Nothing is pre-approved.
     permissionMode: "default",
-    hooks: { PreToolUse: [{ hooks: [createPolicyHook(policy)] }] },
+    hooks: {
+      PreToolUse: [
+        {
+          hooks: [
+            createPolicyHook(policy, (tool, result) =>
+              // Denials are security events: a spec or finding may be trying to steer the agent.
+              config.runLog?.event({ type: "policy.decision", tool, behavior: result.behavior, ...(result.behavior === "deny" ? { reason: result.message } : {}) }),
+            ),
+          ],
+        },
+      ],
+    },
     canUseTool: createToolPolicy(policy),
     outputFormat: { type: "json_schema", schema: z.toJSONSchema(task.schema, { target: "draft-7" }) as Record<string, unknown> },
     persistSession: false,
   };
 
+  config.runLog?.event({ type: "agent.start", model: config.model, effort: config.effort, maxTurns: config.maxTurns, maxBudgetUsd: config.maxBudgetUsd, prompt: task.prompt });
   for await (const message of query({ prompt: task.prompt, options })) {
+    config.runLog?.event({ type: "sdk.message", message });
     const line = describeMessage(message, config.repoRoot);
     if (line) log(line);
 
     if (message.type === "result") {
+      config.runLog?.event({
+        type: "agent.end",
+        subtype: message.subtype,
+        costUsd: message.total_cost_usd,
+        turns: message.num_turns,
+        durationMs: message.duration_ms,
+      });
       if (message.subtype !== "success" || message.is_error) {
         const reason = message.subtype === "success" ? message.result : message.subtype;
         throw new Error(`Agent stopped without finishing: ${reason} (cost $${message.total_cost_usd.toFixed(2)}).`);

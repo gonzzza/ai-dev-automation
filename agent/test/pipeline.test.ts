@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AgentRun } from "../src/agent.js";
 import { runPipeline, type GitOps, type PipelineDeps } from "../src/pipeline.js";
+import { classifyFailure } from "../src/runlog.js";
 import { parseSpec } from "../src/spec.js";
 
 const spec = parseSpec(
@@ -151,5 +152,37 @@ describe("runPipeline", () => {
     expect(result).toMatchObject({ status: "dry-run", branch: "agent/001-rate-limiter" });
     expect(git.commit).not.toHaveBeenCalled();
     expect(git.openPullRequest).not.toHaveBeenCalled();
+  });
+});
+
+describe("traceability", () => {
+  it("puts the run id in a commit trailer and the PR footer", async () => {
+    const { deps, git } = setup();
+    deps.runId = "20261109T073012Z-3f9a1c";
+    await runPipeline(deps);
+    expect(git.commit).toHaveBeenCalledWith(expect.any(Array), expect.stringMatching(/\n\nAgent-Run: 20261109T073012Z-3f9a1c\n$/));
+    expect(git.openPullRequest.mock.calls[0]![1]).toContain("· run 20261109T073012Z-3f9a1c</sub>");
+  });
+
+  // Run against the errors the gates really throw, so rewording a gate message breaks this test
+  // instead of silently turning a failure category into "other" on the dashboards.
+  it.each([
+    [{ checksPassed: false }, "checks-failed"],
+    [{ tamperGit: true }, "git-state-changed"],
+    [{ changed: ["agent/src/policy.ts"] }, "out-of-scope"],
+    [{ symlinks: ["demo-app/src/rate-limiter.ts"] }, "out-of-scope"],
+    [{ contents: { "demo-app/src/rate-limiter.ts": "const k = 'sk-test-value-from-the-env';" } }, "secret-found"],
+    [{ changed: [] as string[] }, "no-changes"],
+    [{ branch: "feature/x" }, "preflight"],
+    [{ dirty: ["README.md"] }, "preflight"],
+    [{ exists: true }, "preflight"],
+  ])("classifies the gate failure for %o as %s", async (options, category) => {
+    const { deps } = setup(options);
+    const error = await runPipeline(deps).then(
+      () => undefined,
+      (e: unknown) => e as Error,
+    );
+    expect(error).toBeInstanceOf(Error);
+    expect(classifyFailure(error!.message)).toBe(category);
   });
 });

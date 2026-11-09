@@ -27,6 +27,7 @@ Requires `git` and an authenticated [`gh`](https://cli.github.com/).
 | `--max-turns <n>` | `60` | Hard stop on agent turns. |
 | `--max-budget <usd>` | `5` | Hard stop on spend. |
 | `--dry-run` | off | Run and verify, but don't commit, push or open a PR. |
+| `--log-dir <dir>` | `<tmp>/spec-agent-runs` | Where the run's [audit log](#audit-log-and-monitoring) goes. |
 
 ## How it works
 
@@ -77,6 +78,61 @@ AI review ─▶ any finding ≥ medium? ──no──▶ done: the human revie
 - **It never merges.** The last step is always a human approval.
 
 **Setup in CI.** The workflow needs an `AGENT_GITHUB_TOKEN` secret in addition to `ANTHROPIC_API_KEY`. A push made with the workflow's own `GITHUB_TOKEN` doesn't trigger workflows, so the fix would never be reviewed. Use a [fine-grained token](https://github.com/settings/personal-access-tokens/new) limited to this repository, with *Contents* and *Pull requests* set to read and write and a short expiry. A GitHub App installation token is the better choice in an organization, because the commits and comments then come from a bot identity, not a person.
+
+## Audit log and monitoring
+
+Every run writes an audit log, and every change it makes can be traced back to that log.
+
+**Traceability.** Each run gets an id such as `20261109T073012Z-3f9a1c`, printed at the start. The id appears in:
+- the commit, as an `Agent-Run` trailer;
+- the PR body footer and the fix-cycle comments, which in CI also link to the Actions run that holds the log;
+- the log's file name.
+
+From any line on `main`, `git log` leads to the run that wrote it, and from there to its transcript.
+
+**The log** is `<run id>.jsonl` in `--log-dir` (default: a `spec-agent-runs` folder in the system temp directory), one JSON object per line:
+
+| Event | Contains |
+|-------|----------|
+| `run.start` | Mode, command-line arguments, Node version, and the CI run link when in Actions. Written first, before anything can fail. |
+| `run.config` | The commit it started from, model, effort, writable directories, turn and budget limits |
+| `spec.input` / `fix.input` | The spec (path, base branch, body), or the PR number, reviewed commit, threshold, cycle limit and findings |
+| `agent.start` | The full prompt sent to the model |
+| `sdk.message` | Every message of the session: the model's turns, tool calls and tool results. This is the transcript. |
+| `policy.decision` | Every tool call the permission policy saw, allowed or denied, with the reason for each denial |
+| `checks.result` | The harness's own re-run of `npm run check` |
+| `agent.end` | The SDK's result: outcome, cost, turns, duration |
+| `log` | The progress lines printed to the console |
+| `run.end` | Always written, even on failure. `ok`, duration and the outcome, or the error and a `category`: `config`, `bad-input`, `preflight`, `agent-stopped`, `bad-report`, `checks-failed`, `git-state-changed`, `out-of-scope`, `secret-found` or `no-changes` |
+
+- **Redaction.** Every line is redacted before it's written: credential values from the environment, and anything matching a known key format, become `[REDACTED]`.
+- **Location.** The log lives outside the repository, so the agent's own tools can't reach it. It's created owner-only (`0700` directory, `0600` file).
+- **It is a record, not tamper-proof evidence.** Tests the agent writes run as the same OS user as the harness, so test code could find the log and edit or truncate it, including the denials it records. For an audit trail that has to hold up against that, send events to an external store as they happen (the OpenTelemetry export below does that for Claude Code's own events), or run the checks in a separate job or sandbox that can't see the log. That separate-job change is the next planned step.
+- **Crash safety.** Lines are appended as they happen, so a crashed run still leaves everything up to the crash.
+- **In CI**, the fix job uploads the log as an artifact (`agent-run-<run id>-<attempt>`, kept for 30 days) even when the run fails.
+
+**Metrics** come straight from the log. For example, cost and outcome per run, and the most common failure categories:
+
+```sh
+jq -c 'select(.type == "run.end") | {runId, ok, category, costUsd, turns, durationMs}' runs/*.jsonl
+jq -r 'select(.type == "run.end" and .ok == false) | .category' runs/*.jsonl | sort | uniq -c
+jq -c 'select(.type == "policy.decision" and .behavior == "deny") | {runId, tool, reason}' runs/*.jsonl  # worth an alert
+```
+
+In a team setup, ship these files to the log platform you already use (Datadog, CloudWatch, Loki) and build the dashboard from `run.end` and `policy.decision`. Alert on denials, failure spikes and cost.
+
+**OpenTelemetry.** The agent runs Claude Code underneath, which can export [OpenTelemetry metrics and events](https://code.claude.com/docs/en/monitoring-usage). Examples are `claude_code.cost.usage`, `claude_code.token.usage`, `claude_code.api_request` and `claude_code.tool_result`. The agent passes its environment to the session, so setting the variables enables it:
+
+```sh
+export CLAUDE_CODE_ENABLE_TELEMETRY=1
+export OTEL_METRICS_EXPORTER=otlp OTEL_LOGS_EXPORTER=otlp
+export OTEL_EXPORTER_OTLP_PROTOCOL=grpc OTEL_EXPORTER_OTLP_ENDPOINT=http://collector:4317
+export OTEL_EXPORTER_OTLP_HEADERS="Authorization=Bearer <token>"
+```
+
+Claude Code's docs list `sdk-ts` as a session entrypoint, which suggests Agent SDK sessions are instrumented. They don't state it outright, though, so confirm that data reaches your collector before you depend on it. Prompt and tool contents stay out of the telemetry unless you opt in, and the run log above already covers them. The variables don't reach `run_checks`, whose environment is an allowlist, so agent-written tests never see the collector's credentials.
+
+**Cost figures are estimates.** They are the SDK's numbers, computed from token usage at list prices. For billing, use the Anthropic Console or usage API.
 
 ## Guardrails
 
@@ -130,6 +186,7 @@ Tests cover:
 - the permission policy;
 - the secret handling;
 - the pipeline gates;
-- the fix cycle: findings parsing, the cycle limit and progress rules, and its gates.
+- the fix cycle: findings parsing, the cycle limit and progress rules, and its gates;
+- the audit log: redaction, run ids and trailers, and failure categories checked against the errors the real gates throw.
 
 They use fake git and fake agent runs, so they run offline at no cost.

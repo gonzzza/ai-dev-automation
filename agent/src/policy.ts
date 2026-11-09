@@ -160,10 +160,15 @@ export function createToolPolicy(options: PolicyOptions): CanUseTool {
  * prompt, and it may auto-approve reads inside the working directory without asking, so the
  * hook is what guarantees every call is checked. Allowed calls fall through to the normal flow.
  */
-export function createPolicyHook(options: PolicyOptions): HookCallback {
+export function createPolicyHook(
+  options: PolicyOptions,
+  /** Sees every decision, allowed or denied, for the audit log. */
+  onDecision?: (tool: string, result: PermissionResult) => void,
+): HookCallback {
   return async (input) => {
     if (input.hook_event_name !== "PreToolUse") return {};
     const result = decide(input.tool_name, (input.tool_input ?? {}) as Record<string, unknown>, options);
+    onDecision?.(input.tool_name, result);
     if (result.behavior !== "deny") return {};
     return { hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: result.message } };
   };
