@@ -47,6 +47,33 @@ spec.md ─▶ preflight ─▶ branch agent/<spec> ─▶ agent loop ─▶ npm
    If any of these fails, nothing is committed and the branch is kept for inspection.
 4. **PR.** Commit, push and `gh pr create`. CI and the AI review run on it. A human approves and merges.
 
+## Fix cycle
+
+After the AI review runs on an agent PR, the agent can address the findings itself, up to a limit, before a human looks. In this repo the [AI review workflow](../.github/workflows/ai-review.yml) runs this automatically; you can also run it by hand:
+
+```sh
+git switch agent/001-rate-limiter && git pull
+npm run agent -- --fix-pr 5 --findings findings.json   # findings.json: the review's findings-json output
+```
+
+```
+AI review ─▶ any finding ≥ medium? ──no──▶ done: the human reviews, low findings included
+                    │ yes
+                    ▼
+             cycle limit or no progress? ──yes──▶ stop: comment "handing over to a human"
+                    │ no
+                    ▼
+             agent fixes or declines each finding ─▶ same gates as a new PR ─▶ commit, push, comment
+                    │
+                    └──▶ the push triggers the AI review again
+```
+
+- **Only real findings get fixed.** Findings below `--min-severity` (default `medium`) are left for the human and listed in the comment. The agent checks each remaining finding against the code. It fixes the real ones with a test and declines the wrong ones with a reason, since the reviewer is a model too.
+- **Bounded.** The cycle stops after `--max-cycles` fix commits (default 5). It also stops when a cycle didn't reduce the number of findings, so the fixer and the reviewer can't trade the same issue back and forth. Each stop posts a comment that hands the PR to a human.
+- **State lives on the PR branch.** Each fix commit carries `Agent-Fix-Cycle` and `Agent-Fix-Findings` trailers, and the next run counts them. No database or run-to-run memory is involved, and the history is visible in `git log`.
+- **Same guardrails.** Fix mode only touches open `agent/*` PRs from this repository. It refuses to run if the branch moved since the reviewed commit (`--reviewed-sha`). It has the same tools, permission policy, scope and secret gates, and harness re-check as a new PR, and the findings are escaped and treated as untrusted input like a spec. The prompt is [`fix-prompt.md`](fix-prompt.md).
+- **It never merges.** The last step is always a human approval.
+
 ## Guardrails
 
 The agent's tools are limited in code, so the limits don't depend on the model following its instructions:
@@ -82,7 +109,7 @@ The defenses are layered, but they are not a sandbox. Run on your machine only s
 
 ## Prompt in Markdown, guardrails in code
 
-The agent's instructions are in [`prompt.md`](prompt.md), a plain Markdown file with `{{writableDirs}}`, `{{specPath}}` and `{{specBody}}` placeholders. To change how the agent works, edit the prose; no TypeScript change is needed. A typo in a placeholder fails the tests instead of producing a broken prompt.
+The agent's instructions are in [`prompt.md`](prompt.md) and, for the fix cycle, [`fix-prompt.md`](fix-prompt.md). Both are plain Markdown with `{{placeholders}}` such as `{{specBody}}`. To change how the agent works, edit the prose; no TypeScript change is needed. A typo in a placeholder fails the tests instead of producing a broken prompt.
 
 The rules that must hold no matter what the model does are in TypeScript: the permission policy, the single `run_checks` tool, the schema-validated report, the turn and budget limits, and the git and PR steps. This is the reason the agent is an [Agent SDK](https://code.claude.com/docs/en/agent-sdk) program, not just a Markdown subagent for Claude Code. A Markdown agent asks the model to stay in scope and to run only the checks. It usually needs a shell to do that, and its output is free text. This agent runs unattended, and its input is a spec that may not be trusted, so those rules are enforced in code and unit tested.
 
@@ -96,6 +123,7 @@ Tests cover:
 - the spec parser;
 - the permission policy;
 - the secret handling;
-- the pipeline gates.
+- the pipeline gates;
+- the fix cycle: findings parsing, the cycle limit and progress rules, and its gates.
 
 They use fake git and fake agent runs, so they run offline at no cost.
