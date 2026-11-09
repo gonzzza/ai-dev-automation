@@ -104,6 +104,20 @@ The selected standards are ordered most severe first. While they exceed `max-sta
 3. Calls Claude with a JSON schema (structured outputs) and gets back `{ summary, findings[] }`.
 4. Findings on diff lines become inline comments. Any others go in the summary. If GitHub rejects the inline comments, it posts them in the review body instead.
 
+## Versions
+
+Each release is a `vX.Y.Z` tag with notes on the [Releases](https://github.com/gonzzza/ai-dev-automation/releases) page. Choose how closely to follow them:
+
+| Reference | You get |
+|-----------|---------|
+| `@v1` | The latest `v1.x.y`: fixes and new features, never a breaking change. |
+| `@v1.0.1` | Exactly that release. |
+| `@<full commit SHA>` | Exactly that code, even if a tag is moved. The safest choice for third-party actions, and Dependabot can keep it current. |
+
+A **major** version means a workflow that worked may stop working or behave differently: an input or output removed or renamed, a default that changes behavior (such as `fail-on`), an incompatible change to `findings-json`, or a newer Node runtime. A **minor** version adds something: a new input, output, finding field or review behavior. A **patch** fixes a bug without changing what a correct workflow sees.
+
+Only changes to `action.yml` or the bundle in `dist/` are released: the rest of this repository doesn't change what the action runs.
+
 ## Security
 
 - The PR title, description and diff are passed as untrusted data, and the system prompt tells the model to ignore instructions inside them. The model's output is only posted as comments; it is never executed.
@@ -116,3 +130,5 @@ The selected standards are ordered most severe first. While they exceed `max-sta
 npm test -w review-action
 npm run build -w review-action   # bundles src/ into dist/index.js; commit dist/
 ```
+
+To release, run the **Release review action** workflow from the Actions tab on `main` and choose patch, minor or major. It runs the checks, creates the `vX.Y.Z` release with notes listing the changes to the action since the last one, and moves the major tag to it.

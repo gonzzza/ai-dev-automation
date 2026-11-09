@@ -1,0 +1,75 @@
+name: Release review action
+
+# Run by hand from the Actions tab: a person decides when a release ships and how big it is.
+# Creates vX.Y.Z as a GitHub release and moves the major tag (v1) to it, which is what
+# `uses: gonzzza/ai-dev-automation/review-action@v1` resolves to. The versioning policy is in
+# review-action/README.md#versions.
+on:
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "patch: fixes. minor: new inputs, outputs or behavior. major: breaking changes."
+        type: choice
+        options: [patch, minor, major]
+        default: patch
+
+permissions:
+  contents: write # create the release and its tag, and move the major tag
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    # Releases come from main only, never from a branch someone dispatched the workflow on.
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0 # every tag and the history since the last release, for the version and notes
+          # npm ci runs third-party install scripts: keep the write token out of .git/config.
+          # Only the two gh steps below get it.
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - name: Lint, typecheck, test
+        run: npm run check
+      - name: Check review-action/dist is up to date
+        run: |
+          npm run build -w review-action
+          if [ -n "$(git status --porcelain -- review-action/dist)" ]; then
+            echo "::error::review-action/dist is stale on main. Rebuild it in a PR before releasing."
+            exit 1
+          fi
+      - name: Plan the release
+        id: plan
+        env:
+          BUMP: ${{ inputs.bump }}
+        run: node review-action/scripts/release.ts "$BUMP" "$RUNNER_TEMP/notes.md" >> "$GITHUB_OUTPUT"
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.plan.outputs.version }}
+        run: |
+          gh release create "$VERSION" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
+            --title "$VERSION" --notes-file "$RUNNER_TEMP/notes.md"
+      # Last, so @v1 users only move once the release exists. Tags pushed with GITHUB_TOKEN don't
+      # trigger workflows, so this can't loop.
+      - name: Move the major tag
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ steps.plan.outputs.version }}
+          MAJOR: ${{ steps.plan.outputs.major }}
+        run: |
+          if gh api "repos/$GITHUB_REPOSITORY/git/ref/tags/$MAJOR" --silent 2>/dev/null; then
+            gh api --method PATCH "repos/$GITHUB_REPOSITORY/git/refs/tags/$MAJOR" -f sha="$GITHUB_SHA" -F force=true --silent
+          else
+            gh api --method POST "repos/$GITHUB_REPOSITORY/git/refs" -f ref="refs/tags/$MAJOR" -f sha="$GITHUB_SHA" --silent
+          fi
+          echo "::notice::Released $VERSION. $MAJOR now points to it."

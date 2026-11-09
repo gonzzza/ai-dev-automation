@@ -43,6 +43,7 @@ npm run build       # build all workspaces (review-action bundles to dist/)
 ## Workspace rules
 
 - **`review-action/dist/` is committed.** GitHub runs the bundled file directly. After changing `review-action/src` **or `standards/src`** (the action bundles the `standards` package), run `npm run build -w review-action` and commit `dist/` in the same commit. CI fails if `dist/` is stale.
+- **Releases of the review action** come only from the *Release review action* workflow (`.github/workflows/release.yml`), run by a person on `main`. Never create, move or delete `v*` tags by hand. The versioning policy (what counts as patch, minor or major) is in `review-action/README.md#versions`.
 - **`agent/`** must stay within the repo it is pointed at: it works on a fresh branch, never pushes to `main`, and is bounded by turn and budget limits.
 - **`demo-app/`** is the agent's target. Keep it small and idiomatic so agent PRs stay easy to review.
 - **`specs/`** follow the template in `specs/README.md`: goal, requirements, acceptance criteria, out of scope. Each acceptance criterion has a unique ID (`- AC1: ...`), and tests that cover it start with that ID. Write new specs with the `/write-spec` skill (`.claude/skills/write-spec/`). Implement a spec with the `/code-spec` skill (`.claude/skills/code-spec/`): it either runs the agent (API spend, `agent/*` branch) or codes it in the session under the agent's brief and gates (`spec/*` branch).
