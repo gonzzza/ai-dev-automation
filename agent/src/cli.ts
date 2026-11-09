@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { relative, resolve } from "node:path";
-import { parseArgs } from "node:util";
+import { parseArgs, parseEnv } from "node:util";
 import { runAgent, type AgentConfig } from "./agent.js";
 import { parseLimit, scopeDir } from "./args.js";
 import { runChecks } from "./checks.js";
@@ -48,8 +48,13 @@ async function main(): Promise<void> {
   const userCwd = process.env.INIT_CWD ?? process.cwd();
   const repoRoot = await run(exec, "git", ["rev-parse", "--show-toplevel"], userCwd);
 
-  // ANTHROPIC_API_KEY can live in an untracked .env at the repo root.
-  if (existsSync(resolve(repoRoot, ".env"))) process.loadEnvFile(resolve(repoRoot, ".env"));
+  // ANTHROPIC_API_KEY can live in an untracked .env at the repo root. Take only that key: anything
+  // else in the file stays out of this process's environment.
+  const envFile = resolve(repoRoot, ".env");
+  if (!process.env.ANTHROPIC_API_KEY && existsSync(envFile)) {
+    const key = parseEnv(await readFile(envFile, "utf8")).ANTHROPIC_API_KEY;
+    if (key) process.env.ANTHROPIC_API_KEY = key;
+  }
   if (!process.env.ANTHROPIC_API_KEY) throw new Error("Set ANTHROPIC_API_KEY (environment or .env at the repo root).");
   const specFile = resolve(userCwd, positionals[0]!);
   const spec = parseSpec(relative(repoRoot, specFile), await readFile(specFile, "utf8"));

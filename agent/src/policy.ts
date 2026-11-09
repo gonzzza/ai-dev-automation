@@ -47,7 +47,7 @@ export function repoRelative(repoRoot: string, target: string): string | null {
  * Changing them could turn the harness's own `npm run check` into a no-op, or make the
  * agent-run tests run arbitrary scripts, so they stay off limits even inside the scope.
  */
-const PROTECTED_CONFIG = /^(package(-lock)?\.json|\.npmrc|\.gitattributes|tsconfig.*\.json|(vitest|vite|eslint)\.config\.[cm]?[jt]s|\.eslintrc.*)$/;
+const PROTECTED_CONFIG = /^(package(-lock)?\.json|\.npmrc|\.git(attributes|ignore)|tsconfig.*\.json|(vitest|vite|eslint)\.config\.[cm]?[jt]s|\.eslintrc.*)$/;
 
 export function isProtectedConfig(path: string): boolean {
   return PROTECTED_CONFIG.test(path.split("/").pop() ?? "");

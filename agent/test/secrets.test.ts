@@ -9,6 +9,7 @@ const env = {
   ANTHROPIC_API_KEY: "sk-ant-api03-abcdefghijklmnopqrstuvwxyz",
   GH_TOKEN: "gho_abcdefghijklmnopqrstuvwxyz0123456789",
   NPM_CONFIG_AUTH: "short",
+  DATABASE_URL: "postgres://app:hunter2hunter2@db:5432/app",
 };
 
 describe("checksEnv", () => {
@@ -18,6 +19,7 @@ describe("checksEnv", () => {
     expect(result).not.toHaveProperty("ANTHROPIC_API_KEY");
     expect(result).not.toHaveProperty("GH_TOKEN");
     expect(result).not.toHaveProperty("NPM_CONFIG_AUTH");
+    expect(result).not.toHaveProperty("DATABASE_URL"); // an ordinary name: only an allowlist catches it
   });
 });
 
@@ -28,6 +30,8 @@ describe("findSecrets", () => {
     expect(findSecrets(`key=${env.GH_TOKEN}`, known)).toContain("a credential from the environment");
     expect(findSecrets("sk-ant-api03-zzzzzzzzzzzzzzzzzzzzzzzz", [])).toEqual(["Anthropic API key"]);
     expect(findSecrets("-----BEGIN RSA PRIVATE KEY-----", [])).toEqual(["private key"]);
+    expect(findSecrets("url: postgres://app:hunter2@db/app", [])).toEqual(["URL with a password"]);
+    expect(findSecrets("see https://github.com/o/r and git@github.com:o/r.git", [])).toEqual([]);
   });
 
   it("passes ordinary code and documentation placeholders", () => {

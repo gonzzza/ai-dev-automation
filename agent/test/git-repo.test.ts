@@ -36,12 +36,23 @@ describe("Git, against a real repo", () => {
     expect(await git.fingerprint()).not.toBe(before);
     rmSync(join(dir, ".git", "hooks", "pre-push"));
 
+    sh("update-index", "--assume-unchanged", "a.txt"); // hides edits to a.txt from git status
+    expect(await git.fingerprint()).not.toBe(before);
+    sh("update-index", "--no-assume-unchanged", "a.txt");
+    sh("update-index", "--skip-worktree", "a.txt");
+    expect(await git.fingerprint()).not.toBe(before);
+    sh("update-index", "--no-skip-worktree", "a.txt");
+    writeFileSync(join(dir, ".git", "info", "exclude"), "vitest.config.ts\n");
+    expect(await git.fingerprint()).not.toBe(before);
+    writeFileSync(join(dir, ".git", "info", "exclude"), "");
+    const reset = await git.fingerprint();
+
     sh("switch", "-qc", "other");
     expect(await git.fingerprint()).not.toBe(before);
     sh("switch", "-q", "agent/x");
 
     sh("commit", "-q", "--allow-empty", "-m", "planted");
-    expect(await git.fingerprint()).not.toBe(before);
+    expect(await git.fingerprint()).not.toBe(reset);
   });
 
   it("covers the shared config from a linked worktree", async () => {

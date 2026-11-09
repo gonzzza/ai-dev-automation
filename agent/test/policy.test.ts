@@ -26,7 +26,7 @@ describe("decide", () => {
   });
 
   it("denies writes to the files that define how the checks run, even inside the scope", () => {
-    for (const file of [".gitattributes", "package.json", "package-lock.json", "tsconfig.json", "tsconfig.build.json", "vitest.config.ts", "eslint.config.js"]) {
+    for (const file of [".gitattributes", ".gitignore", "package.json", "package-lock.json", "tsconfig.json", "tsconfig.build.json", "vitest.config.ts", "eslint.config.js"]) {
       expect(allowed("Write", { file_path: `demo-app/${file}` })).toBe(false);
     }
     expect(decide("Edit", { file_path: "demo-app/package.json" }, options)).toMatchObject({ message: expect.stringContaining("configures how the checks run") });

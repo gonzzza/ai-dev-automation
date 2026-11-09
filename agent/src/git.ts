@@ -42,14 +42,17 @@ export class Git {
   /**
    * A hash of the git state that agent-run code could change without it showing in `git status`:
    * the checked-out branch and commit (a commit made during the run would hide its files from the
-   * scope gate), the repo config and the hooks. Uses the common dir, so linked worktrees are covered.
+   * scope gate), the repo config and hooks, `info/exclude`, and index entries flagged
+   * assume-unchanged or skip-worktree. Uses the common dir, so linked worktrees are covered.
    */
   async fingerprint(): Promise<string> {
-    const [head, branch, gitDir, commonDir] = await Promise.all([
+    const [head, branch, gitDir, commonDir, flagged] = await Promise.all([
       this.git("rev-parse", "HEAD"),
       this.currentBranch(),
       this.git("rev-parse", "--absolute-git-dir"),
       this.git("rev-parse", "--path-format=absolute", "--git-common-dir"),
+      // assume-unchanged (lowercase tag) and skip-worktree (S) hide a tracked file's edits from status.
+      this.git("ls-files", "-v").then((out) => out.split("\n").filter((line) => /^([a-z]|S) /.test(line)).join("\n")),
     ]);
     const read = (path: string) => readFile(path, "utf8").catch(() => "<missing>");
     const hooksDir = join(commonDir, "hooks");
@@ -58,6 +61,8 @@ export class Git {
       `HEAD ${head} ${branch}`,
       `config\n${await read(join(commonDir, "config"))}`,
       `config.worktree\n${await read(join(gitDir, "config.worktree"))}`,
+      `info/exclude\n${await read(join(commonDir, "info", "exclude"))}`,
+      `hidden index entries\n${flagged}`,
     ];
     for (const name of hooks.sort()) parts.push(`hooks/${name}\n${await read(join(hooksDir, name))}`);
     return createHash("sha256").update(parts.join("\0")).digest("hex");
