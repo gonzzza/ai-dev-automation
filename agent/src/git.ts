@@ -21,6 +21,24 @@ export function parsePorcelainZ(output: string): string[] {
   return paths;
 }
 
+/**
+ * Config keys that editors write by themselves and that change no git behavior. VS Code's Git
+ * extension sets branch.<name>.vscode-merge-base a few seconds after it sees a new branch.
+ * Keep this list to inert keys: anything that can run code or redirect a remote must still count.
+ */
+const INERT_CONFIG_KEY = /^branch\..+\.vscode-merge-base$/;
+
+/**
+ * The entries of `git config --list -z` ("key\nvalue" records, NUL-separated) that matter for the
+ * fingerprint, with inert IDE keys removed. Order is kept: later entries override earlier ones.
+ */
+export function fingerprintConfig(listOutput: string): string {
+  return listOutput
+    .split("\0")
+    .filter((entry) => entry !== "" && !INERT_CONFIG_KEY.test(entry.split("\n", 1)[0]!))
+    .join("\0");
+}
+
 /** Thin git/gh wrapper. Messages go through temp files so nothing is shell-parsed. */
 export class Git {
   constructor(
@@ -57,10 +75,16 @@ export class Git {
     const read = (path: string) => readFile(path, "utf8").catch(() => "<missing>");
     const hooksDir = join(commonDir, "hooks");
     const hooks = await readdir(hooksDir).catch(() => [] as string[]);
+    // Config is hashed as git parses it, minus keys editors write on their own, so an IDE noticing the
+    // new branch doesn't fail the run. If git can't parse the file, the raw text is hashed instead.
+    const config = async (path: string) => {
+      const result = await this.exec("git", [...Git.SAFE, "config", "--file", path, "--list", "-z"], { cwd: this.cwd });
+      return result.code === 0 ? fingerprintConfig(result.stdout) : `raw\n${await read(path)}`;
+    };
     const parts = [
       `HEAD ${head} ${branch}`,
-      `config\n${await read(join(commonDir, "config"))}`,
-      `config.worktree\n${await read(join(gitDir, "config.worktree"))}`,
+      `config\n${await config(join(commonDir, "config"))}`,
+      `config.worktree\n${await config(join(gitDir, "config.worktree"))}`,
       `info/exclude\n${await read(join(commonDir, "info", "exclude"))}`,
       `hidden index entries\n${flagged}`,
     ];
