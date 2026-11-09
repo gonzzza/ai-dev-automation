@@ -173,6 +173,12 @@ export async function run({ io, repo: { owner, repo }, pullRequest: pr, createOc
         const id = ids[i];
         if (id !== undefined) commentIds.set(finding, id);
       });
+      // A finding without an id still works, so a failed match would otherwise go unnoticed.
+      if (commentIds.size < inline.length) {
+        io.warning(
+          `Matched ${commentIds.size} of ${inline.length} inline comments to their ids; the fix cycle can't reply on the threads of the rest.`,
+        );
+      }
     } catch (error) {
       io.warning(`Could not read back the inline comment ids: ${errorMessage(error)}`);
     }

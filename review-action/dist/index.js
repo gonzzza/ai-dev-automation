@@ -77177,14 +77177,13 @@ ${anchored.map(renderFindingListItem).join("\n")}`)
 }
 async function inlineCommentIds(octokit, target, reviewId, inline) {
   const { owner, repo, pullNumber } = target;
-  const posted = await octokit.paginate(octokit.rest.pulls.listCommentsForReview, {
+  const all = await octokit.paginate(octokit.rest.pulls.listReviewComments, {
     owner,
     repo,
     pull_number: pullNumber,
-    review_id: reviewId,
     per_page: 100
   });
-  const unclaimed = [...posted];
+  const unclaimed = all.filter((p) => p.pull_request_review_id === reviewId);
   return inline.map((c) => {
     const body = fitBody(c.body);
     const i = unclaimed.findIndex((p) => p.path === c.path && (p.line ?? p.original_line) === c.line && p.body === body);
@@ -77438,6 +77437,11 @@ async function run({ io, repo: { owner, repo }, pullRequest: pr, createOctokit, 
         const id = ids[i];
         if (id !== void 0) commentIds.set(finding, id);
       });
+      if (commentIds.size < inline.length) {
+        io.warning(
+          `Matched ${commentIds.size} of ${inline.length} inline comments to their ids; the fix cycle can't reply on the threads of the rest.`
+        );
+      }
     } catch (error63) {
       io.warning(`Could not read back the inline comment ids: ${errorMessage2(error63)}`);
     }

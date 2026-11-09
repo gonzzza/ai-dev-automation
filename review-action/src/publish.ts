@@ -64,6 +64,10 @@ export async function publishReview(
  * The ids of the inline comments a review created, in the order of `inline` (undefined where none
  * matched). createReview doesn't return them, so they are read back and matched on path, line and
  * body; identical comments are matched in order.
+ *
+ * They are read from the PR's review comments, filtered to this review. The per-review endpoint,
+ * listCommentsForReview, returns GitHub's legacy comment shape, which has no `line` or
+ * `original_line`, so nothing read from it would ever match.
  */
 export async function inlineCommentIds(
   octokit: Pick<Octokit, "rest" | "paginate">,
@@ -72,14 +76,13 @@ export async function inlineCommentIds(
   inline: InlineComment[],
 ): Promise<(number | undefined)[]> {
   const { owner, repo, pullNumber } = target;
-  const posted = await octokit.paginate(octokit.rest.pulls.listCommentsForReview, {
+  const all = await octokit.paginate(octokit.rest.pulls.listReviewComments, {
     owner,
     repo,
     pull_number: pullNumber,
-    review_id: reviewId,
     per_page: 100,
   });
-  const unclaimed = [...posted];
+  const unclaimed = all.filter((p) => p.pull_request_review_id === reviewId);
   return inline.map((c) => {
     const body = fitBody(c.body);
     const i = unclaimed.findIndex((p) => p.path === c.path && (p.line ?? p.original_line) === c.line && p.body === body);
