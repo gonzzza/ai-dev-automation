@@ -140,7 +140,8 @@ describe("the fix prompt", () => {
     expect(task.prompt).not.toMatch(/\{\{\w+\}\}/);
     expect(task.prompt).toContain('<spec path="specs/001-rate-limiter.md">\n# Spec body');
     expect(task.prompt).toContain('<finding id="1" severity="medium"');
-    expect(task.prompt).toMatch(/<deferred-findings [^>]*>\n<finding id="1" severity="low"[^>]*>\nDate\.now is not monotonic/);
+    // D-prefixed, so they can't be confused with the ids the agent reports outcomes for.
+    expect(task.prompt).toMatch(/<deferred-findings [^>]*>\n<finding id="D1" severity="low"[^>]*>\nDate\.now is not monotonic/);
     expect(task.prompt).toContain("don't write code or tests that lock in behavior they describe as a bug");
   });
 

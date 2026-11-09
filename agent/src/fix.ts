@@ -149,12 +149,15 @@ export function decideFix(
 
 const escapeXml = (text: string) => text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
-/** Findings as tagged blocks for the prompt. Escaped, so a finding can't close its tag and add instructions. */
-export function renderFindingsForPrompt(findings: Finding[]): string {
+/**
+ * Findings as tagged blocks for the prompt. Escaped, so a finding can't close its tag and add instructions.
+ * `idPrefix` keeps context-only findings (D1, D2…) from sharing ids with the ones the agent reports on.
+ */
+export function renderFindingsForPrompt(findings: Finding[], idPrefix = ""): string {
   return findings
     .map(
       (f, i) =>
-        `<finding id="${i + 1}" severity="${f.severity}" category="${escapeXml(f.category)}" path="${escapeXml(f.path)}" line="${f.line}">\n` +
+        `<finding id="${idPrefix}${i + 1}" severity="${f.severity}" category="${escapeXml(f.category)}" path="${escapeXml(f.path)}" line="${f.line}">\n` +
         `${escapeXml(f.title)}\n\n${escapeXml(f.body)}\n</finding>`,
     )
     .join("\n\n");
@@ -186,7 +189,7 @@ export function fixTask(
     specPath: specPathForBranch(branch),
     specBody: specBody ?? "(No spec file found for this branch. Work from the code and the findings.)",
     findings: renderFindingsForPrompt(findings),
-    deferred: deferred.length ? renderFindingsForPrompt(deferred) : "(none)",
+    deferred: deferred.length ? renderFindingsForPrompt(deferred, "D") : "(none)",
   });
   return { prompt, schema: FixReportSchema };
 }
