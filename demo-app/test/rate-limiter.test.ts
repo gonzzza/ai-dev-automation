@@ -92,6 +92,51 @@ describe("createRateLimiter", () => {
     expect(limiter.available()).toBe(1);
   });
 
+  it("AC5: concurrent acquire calls on an empty bucket wait in turn and never overdraw", async () => {
+    // Sleeps stay pending until the test advances the fake clock past their deadline,
+    // so both callers really are asleep at the same time.
+    let time = 0;
+    const sleeps: number[] = [];
+    const pending: { until: number; resolve: () => void }[] = [];
+    const limiter = createRateLimiter({
+      capacity: 1,
+      refillPerSecond: 1,
+      now: () => time,
+      sleep: (ms) => {
+        sleeps.push(ms);
+        return new Promise<void>((resolve) => pending.push({ until: time + ms, resolve }));
+      },
+    });
+    const flush = async () => {
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+    };
+
+    expect(limiter.tryRemove()).toBe(true);
+    const completedAt: number[] = [];
+    const both = Promise.all([
+      limiter.acquire().then(() => void completedAt.push(time)),
+      limiter.acquire().then(() => void completedAt.push(time)),
+    ]);
+
+    const balances: number[] = [];
+    await flush();
+    for (let steps = 0; pending.length > 0 && steps < 10; steps++) {
+      pending.sort((a, b) => a.until - b.until);
+      const next = pending.shift()!;
+      time = next.until;
+      next.resolve();
+      await flush();
+      balances.push(limiter.available());
+    }
+    await both;
+
+    // Ordering between the two callers is out of scope; only the timing is checked.
+    expect(completedAt).toEqual([1000, 2000]);
+    expect(sleeps).toEqual([1000, 1000, 1000]);
+    expect(Math.min(...balances)).toBeGreaterThanOrEqual(0);
+    expect(limiter.available()).toBe(0);
+  });
+
   it.each([0, -1, 1.5, Number.NaN])("AC6: rejects capacity %s", (capacity) => {
     expect(() => createRateLimiter({ capacity, refillPerSecond: 1 })).toThrow(RangeError);
     expect(() => createRateLimiter({ capacity, refillPerSecond: 1 })).toThrow(`capacity must be a positive integer; got ${capacity}`);
