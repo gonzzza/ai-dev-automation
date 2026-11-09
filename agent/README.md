@@ -74,6 +74,8 @@ AI review ─▶ any finding ≥ medium? ──no──▶ done: the human revie
 - **Same guardrails.** Fix mode only touches open `agent/*` PRs from this repository. It refuses to run if the branch moved since the reviewed commit (`--reviewed-sha`). It has the same tools, permission policy, scope and secret gates, and harness re-check as a new PR, and the findings are escaped and treated as untrusted input like a spec. The prompt is [`fix-prompt.md`](fix-prompt.md).
 - **It never merges.** The last step is always a human approval.
 
+**Setup in CI.** The workflow needs an `AGENT_GITHUB_TOKEN` secret in addition to `ANTHROPIC_API_KEY`. A push made with the workflow's own `GITHUB_TOKEN` doesn't trigger workflows, so the fix would never be reviewed. Use a [fine-grained token](https://github.com/settings/personal-access-tokens/new) limited to this repository, with *Contents* and *Pull requests* set to read and write and a short expiry. A GitHub App installation token is the better choice in an organization, because the commits and comments then come from a bot identity, not a person.
+
 ## Guardrails
 
 The agent's tools are limited in code, so the limits don't depend on the model following its instructions:
@@ -104,6 +106,8 @@ The gates catch changes to the repo before anything is committed, and anything e
 - changing your user-level configuration, such as `~/.gitconfig`, gh's config or your shell profile, which later commands, the harness's own included, would pick up.
 
 Protecting all of that is a job for an operating-system boundary, not for checks inside the process.
+
+The fix cycle in CI is the same case. Agent-written tests run in a job that also holds `ANTHROPIC_API_KEY` and `AGENT_GITHUB_TOKEN`. The tests' environment leaves both out, and the checkout keeps tokens out of `.git/config`, but code on the runner could still find them. Keep the token scoped to this one repository, so the worst case is a push to this repo's branches, which branch protection and the human approval still guard.
 
 The defenses are layered, but they are not a sandbox. Run on your machine only specs you trust, with the key in an environment variable rather than in `.env`. For anything else, run the agent in a disposable container or a CI job that has only the secrets it needs.
 
