@@ -30,7 +30,7 @@ jobs:
 |-------|---------|-------------|
 | `anthropic-api-key` | required | Anthropic API key, from a secret. If empty (e.g. PRs from forks), the review is skipped with a warning. |
 | `github-token` | `github.token` | Needs `pull-requests: write`. |
-| `model` | `claude-opus-5-5` | Claude model ID. |
+| `model` | `claude-sonnet-5-5` | Claude model ID. |
 | `effort` | `high` | `low`, `medium`, `high`, `xhigh` or `max`. Higher is more thorough and costs more. |
 | `fail-on` | `none` | Fail the check on a finding at or above `low`, `medium`, `high` or `critical`. |
 | `max-diff-chars` | `400000` | Diff budget. Files past it are listed as not reviewed, never silently truncated. |

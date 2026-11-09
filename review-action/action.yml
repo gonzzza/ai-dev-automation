@@ -14,7 +14,7 @@ inputs:
     default: ${{ github.token }}
   model:
     description: "Claude model ID."
-    default: "claude-opus-5-5"
+    default: "claude-sonnet-5-5"
   effort:
     description: "Reasoning effort: low, medium, high, xhigh or max."
     default: "high"

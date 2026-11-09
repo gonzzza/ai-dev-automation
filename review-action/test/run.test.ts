@@ -17,7 +17,7 @@ const finding = (over: Partial<Finding> = {}): Finding => ({
 const DEFAULT_INPUTS: Record<string, string> = {
   "anthropic-api-key": "sk-test",
   "github-token": "gh-test",
-  model: "claude-opus-5-5",
+  model: "claude-sonnet-5-5",
   effort: "high",
   "fail-on": "none",
   "max-diff-chars": "400000",
@@ -64,7 +64,7 @@ function setup({
     finalMessage: async () => ({
       stop_reason: "end_turn",
       parsed_output: { summary: "Summary.", findings },
-      model: "claude-opus-5-5",
+      model: "claude-sonnet-5-5",
       usage: { input_tokens: 10, output_tokens: 5 },
     }),
   }));

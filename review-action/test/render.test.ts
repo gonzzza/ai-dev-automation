@@ -48,7 +48,7 @@ describe("fitBody", () => {
 });
 
 describe("renderSummary", () => {
-  const meta = { model: "claude-opus-5-5", inputTokens: 12345, outputTokens: 678, reviewedFiles: 1 };
+  const meta = { model: "claude-sonnet-5-5", inputTokens: 12345, outputTokens: 678, reviewedFiles: 1 };
 
   it("includes the marker, tally, unanchored findings and skipped files", () => {
     const review = {
