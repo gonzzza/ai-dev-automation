@@ -16,8 +16,8 @@ jobs:
   check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions/setup-node@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version-file: .nvmrc
           cache: npm
@@ -29,6 +29,6 @@ jobs:
           npm run build -w review-action
           # status --porcelain also catches new untracked build output, not just modified files.
           if [ -n "$(git status --porcelain -- review-action/dist)" ]; then
-            echo "::error::review-action/dist is stale. Run 'npm run build -w review-action' and commit the result."
+            echo "::error::review-action/dist is stale. Run 'npm run build -w review-action' and commit the result. On a Dependabot PR, do that on its branch (see CLAUDE.md)."
             exit 1
           fi

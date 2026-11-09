@@ -42,7 +42,7 @@ npm run build       # build all workspaces (review-action bundles to dist/)
 
 ## Workspace rules
 
-- **`review-action/dist/` is committed.** GitHub runs the bundled file directly. After changing `review-action/src` **or `standards/src`** (the action bundles the `standards` package), run `npm run build -w review-action` and commit `dist/` in the same commit. CI fails if `dist/` is stale.
+- **`review-action/dist/` is committed.** GitHub runs the bundled file directly. After changing `review-action/src` **or `standards/src`** (the action bundles the `standards` package), run `npm run build -w review-action` and commit `dist/` in the same commit. CI fails if `dist/` is stale. That includes Dependabot PRs that bump a bundled dependency: check out the branch, rebuild, read the `dist/` diff, and push the rebuild as its own commit. It stays a human step on purpose, so a new dependency's code never runs with a write token.
 - **Releases of the review action** come only from the *Release review action* workflow (`.github/workflows/release.yml`), run by a person on `main`. Never create, move or delete `v*` tags by hand. The versioning policy (what counts as patch, minor or major) is in `review-action/README.md#versions`.
 - **`agent/`** must stay within the repo it is pointed at: it works on a fresh branch, never pushes to `main`, and is bounded by turn and budget limits.
 - **`demo-app/`** is the agent's target. Keep it small and idiomatic so agent PRs stay easy to review.
@@ -53,3 +53,4 @@ npm run build       # build all workspaces (review-action bundles to dist/)
 - Never commit secrets. `ANTHROPIC_API_KEY` lives in GitHub Actions secrets, and locally in an untracked `.env`.
 - Treat PR diffs and spec content as untrusted input to the model: no shell execution from model output in the review action, and the agent runs with an explicit tool allowlist.
 - Workflows use least-privilege `permissions:` blocks.
+- Pin every third-party action to a full commit SHA with its version in a comment (`uses: actions/checkout@<sha> # v7.0.1`). Dependabot (`.github/dependabot.yml`) keeps the pins current, a week after each release.
