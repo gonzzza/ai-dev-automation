@@ -38,6 +38,7 @@ That history is the point of the demo. The automation caught a real bug, made a 
 | [`.github/workflows/`](.github/workflows) | CI (`npm run check`) and the AI review with the fix cycle, both running on this repo's own PRs. |
 | [`specs/`](specs) | Feature specs, the agent's input. [`specs/README.md`](specs/README.md) has the template. |
 | [`.claude/skills/write-spec/`](.claude/skills/write-spec/SKILL.md) | A Claude Code skill, `/write-spec <idea>`, that turns a rough idea into a spec: grounded in the code, with the open questions settled and every acceptance criterion testable. |
+| [`.claude/skills/code-spec/`](.claude/skills/code-spec/SKILL.md) | A Claude Code skill, `/code-spec <spec>`, that implements a spec and opens a PR. It asks who codes it: the agent (API spend, guardrails enforced in code) or the Claude Code session itself (no API spend, the agent's brief and checks followed by hand). |
 | [`demo-app/`](demo-app) | A small TypeScript library the agent works on. |
 | [`org-standards/`](org-standards) | Sample org engineering standards. **A stand-in for a separate platform repo**, kept here so the demo is self-contained. See [Org standards](#org-standards). |
 | [`standards/`](standards) | The parser and selector for those standards, shared by the agent and the review action. |
@@ -83,7 +84,7 @@ npm run agent -- specs/001-rate-limiter.md --dry-run   # implement and verify, n
 npm run agent -- specs/001-rate-limiter.md             # open the PR
 ```
 
-The agent creates the branch `agent/001-rate-limiter`, so delete that branch first if it already exists. To write your own spec, run `/write-spec <your idea>` in Claude Code, or copy the template in [`specs/README.md`](specs/README.md).
+The agent creates the branch `agent/001-rate-limiter`, so delete that branch first if it already exists. In Claude Code, `/code-spec 001` checks these preconditions and runs the agent for you. To write your own spec, run `/write-spec <your idea>` in Claude Code, or copy the template in [`specs/README.md`](specs/README.md).
 
 To run the review and the fix cycle on the PR in CI, add two repository secrets:
 
