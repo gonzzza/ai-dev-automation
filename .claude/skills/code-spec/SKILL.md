@@ -104,7 +104,14 @@ You do the agent's job and the harness's job, under the same rules.
 
 1. **Scope.** Every path in `git status --porcelain` is inside the scope, and none is protected config.
 2. **Git state.** No commits were made and no hooks or git config changed during the work: `git log <base>..HEAD` is empty, and running `ls -la .git/hooks` and `git config --local --list` again gives exactly what you saved in the snapshot (compare with `diff`). If there is no snapshot, say so: this gate can't pass without one.
-3. **Secrets.** Search the diff, including new files, and the PR body you are about to write, for credential formats: `sk-ant-`, `ghp_`/`gho_`/`ghu_`/`ghs_`/`ghr_`, `github_pat_`, `AKIA` followed by 16 characters, `-----BEGIN ... PRIVATE KEY-----`, and URLs with a password (`scheme://user:pass@`). There should be no hits.
+3. **Secrets.** Scan every changed file in full, new untracked files included, and the PR body, for the credential formats the agent's harness checks (`SECRET_PATTERNS` in `agent/src/secrets.ts`). A plain `git diff` misses untracked files, which are most of a session-mode change, so list the files with `git ls-files -m -o --exclude-standard` (modified plus untracked, not ignored). Write the PR body to a file in your scratchpad first, then:
+
+   ```sh
+   PATTERNS='sk-ant-[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----|[a-z][a-z0-9+.-]*://[^[:space:]:@/]+:[^[:space:]@/]+@'
+   git ls-files -m -o --exclude-standard -z | xargs -0 grep -nIiE "$PATTERNS" -- <scratchpad>/pr-body.md
+   ```
+
+   There should be no output. Look at every hit before deciding it's a false positive, and if it is, say why in the PR notes. If `SECRET_PATTERNS` and this list disagree, the code wins: update the pattern here.
 
 **Confirm, then publish.** Show the user the summary, the plan, the files changed (`git diff --stat`) and any notes, and offer to show the full diff. Commit, push and open the PR only after a clear yes:
 
