@@ -4,7 +4,8 @@
 
 ```mermaid
 flowchart LR
-  spec["Spec<br/>(markdown)"] --> agent["Agent writes<br/>code + tests"]
+  spec["Spec<br/>(markdown)"] --> specReview["Spec review<br/>(optional, human)"]
+  specReview --> agent["Agent writes<br/>code + tests"]
   agent --> pr["Pull request<br/>+ CI"]
   pr --> review["AI review<br/>(a different model)"]
   review -- "findings ≥ medium" --> fix["Agent fixes or declines<br/>(up to 5 cycles)"]
@@ -12,6 +13,8 @@ flowchart LR
   review -- "only low findings, or none" --> human["Human approves<br/>and merges"]
   standards[("Org standards<br/>(versioned)")] -.-> agent
   standards -.-> review
+  classDef optional stroke-dasharray: 5 5
+  class specReview optional
 ```
 
 AI coding agents are fast, but unattended they are hard to trust. This repo shows one way to make them trustworthy: the agent works from a written spec, guardrails enforced in code and checked in CI limit what it can do, a second model reviews every change, and a person still approves every merge.
@@ -50,6 +53,14 @@ The same spec, before the agent had standards or the spec had criterion IDs. It'
 6. **The final review had one low finding left**, so the loop stopped and handed the PR to a human.
 
 That history is the point of the demo. The automation caught a real bug, made a mistake, and stayed bounded. Every step is visible on the PR for the person who decides.
+
+## Review the spec, before any code
+
+The spec is the cheapest place to catch a mistake. The agent builds what the spec says, so if the spec leaves a behavior undefined, no later step can reliably get it right.
+
+The clock bug in the runs above is that kind of gap. [Spec 001](specs/001-rate-limiter.md) makes the clock injectable but never says what the limiter does when the clock steps backwards. With no defined right answer, the reviewer rated the bug medium, then low, then medium, and one fix cycle locked it in as a test. One line in the spec would have settled it before the agent ran.
+
+A spec reaches `main` through a pull request, like code, and in CI the agent implements only specs on `main` ([`implement-spec.yml`](.github/workflows/implement-spec.yml)). That PR is where a product owner or tech lead reviews the requirements, the edge cases and the acceptance criteria. How much review it gets is up to the team: a small, well-understood change can merge after a quick look, while a payment flow should get its owner's review. [`specs/README.md`](specs/README.md#review-the-spec) lists what to look for. `/write-spec` already pushes back on criteria it can't test, but it can't know what the business needs.
 
 ## What's in the repo
 

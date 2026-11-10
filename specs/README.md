@@ -8,7 +8,7 @@ The easiest way to write one is the `/write-spec` skill in Claude Code:
 /write-spec circuit breaker for outbound calls
 ```
 
-It reads the code the change touches, drafts the spec, asks the few questions that would change what gets built, checks every criterion is testable, and validates the file. It stops there: you review the spec before anything gets implemented. The skill is in [`.claude/skills/write-spec/`](../.claude/skills/write-spec/SKILL.md).
+It reads the code the change touches, drafts the spec, asks the few questions that would change what gets built, checks every criterion is testable, and validates the file. It stops there: you [review the spec](#review-the-spec) before anything gets implemented. The skill is in [`.claude/skills/write-spec/`](../.claude/skills/write-spec/SKILL.md).
 
 The file name becomes the branch name, so use lowercase kebab-case with a number: `002-add-cache.md` → branch `agent/002-add-cache`.
 
@@ -38,3 +38,13 @@ Why this change exists and who it is for. Two or three sentences.
 - `Goal`, `Requirements` and `Acceptance criteria` are required.
 - Every top-level bullet under `Acceptance criteria` starts with a unique ID: `- AC1: ...`. The agent starts each test's name with the ID it covers (`it("AC3: ...")`), so a reviewer can trace every criterion to its tests. Indented lines and prose between bullets are fine.
 - File names are numbered, and no two specs share a number.
+
+## Review the spec
+
+A spec reaches `main` through a pull request, and in CI the agent implements only specs on `main`, so that PR is the spec review. The checks above confirm the spec is well-formed. A reviewer confirms it's right. Look for:
+
+- **Behavior the spec leaves undefined:** edge cases, errors, bad input, time and clocks. The agent will pick a behavior, and the AI review can't tell whether it's the one you wanted. Spec 001 never said what happens when the clock steps backwards, and that gap is the clock bug in the [example runs](../README.md#review-the-spec-before-any-code).
+- **Acceptance criteria that miss a requirement**, or that a test can't settle.
+- **Scope that won't fit one reviewable PR.** Split it into two specs.
+
+Locally, `npm run agent` takes any spec file, merged or not, so the review is up to you.
