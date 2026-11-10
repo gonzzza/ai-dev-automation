@@ -40,7 +40,7 @@ jobs:
 | `standards-ref` | | Label for the version of the standards applied (a tag or SHA), shown in the summary. |
 | `max-standards-chars` | `40000` | Budget for standards text in the prompt. Past it, the least severe standards are left out and listed as not checked. |
 
-Outputs: `findings` (count), `highest-severity`, and `findings-json`: the findings as a JSON array, most severe first, for automation such as the [agent's fix cycle](../agent#fix-cycle). A finding posted as an inline comment carries that comment's `commentId`, so automation can reply on its thread, and a finding that breaks an org standard carries its id as `rule`. It is model output, so validate it before acting on it.
+Outputs: `findings` (count), `highest-severity`, and `findings-json`: the findings as a JSON array, most severe first, for automation such as the [agent's fix cycle](../spec-coding-agent#fix-cycle). A finding posted as an inline comment carries that comment's `commentId`, so automation can reply on its thread, and a finding that breaks an org standard carries its id as `rule`. It is model output, so validate it before acting on it.
 
 Each run collapses the previous AI review's inline comments as outdated, except threads someone replied to: those stay visible as the record of how the finding was settled.
 

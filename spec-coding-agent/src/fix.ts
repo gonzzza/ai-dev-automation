@@ -175,7 +175,7 @@ export const FIX_PROMPT_FILE = fileURLToPath(new URL("../fix-prompt.md", import.
 export const specPathForBranch = (branch: string): string => `specs/${branch.replace(/^agent\//, "")}.md`;
 
 /**
- * The fix task, from agent/fix-prompt.md. `deferred` are the findings below the threshold: the agent
+ * The fix task, from spec-coding-agent/fix-prompt.md. `deferred` are the findings below the threshold: the agent
  * doesn't fix them, but sees them so it doesn't write code or tests that lock in what they describe.
  * `specBody` is undefined if the spec can't be found.
  */

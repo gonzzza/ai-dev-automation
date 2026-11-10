@@ -214,7 +214,7 @@ describe("traceability", () => {
   it.each([
     [{ checksPassed: false }, "checks-failed"],
     [{ tamperGit: true }, "git-state-changed"],
-    [{ changed: ["agent/src/policy.ts"] }, "out-of-scope"],
+    [{ changed: ["spec-coding-agent/src/policy.ts"] }, "out-of-scope"],
     [{ symlinks: ["demo-app/src/rate-limiter.ts"] }, "out-of-scope"],
     [{ contents: { "demo-app/src/rate-limiter.ts": "const k = 'sk-test-value-from-the-env';" } }, "secret-found"],
     [{ changed: [] as string[] }, "no-changes"],

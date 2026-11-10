@@ -66,7 +66,7 @@ A spec reaches `main` through a pull request, like code, and in CI the agent imp
 
 | Path | What it is |
 |------|------------|
-| [`agent/`](agent) | The spec-driven agent, built on the [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk). It reads a spec, implements it with tests, verifies the result independently, and opens a PR. In fix mode it addresses review findings on its own PRs. |
+| [`spec-coding-agent/`](spec-coding-agent) | The spec-driven agent, built on the [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk). It reads a spec, implements it with tests, verifies the result independently, and opens a PR. In fix mode it addresses review findings on its own PRs. |
 | [`review-action/`](review-action) | A GitHub Action that reviews a PR's diff with Claude and posts inline comments on bugs, security issues and missing tests. Other repositories can use it on its own. |
 | [`.github/workflows/`](.github/workflows) | CI (`npm run check`) and the AI review with the fix cycle on this repo's own PRs; *Implement a spec*, which runs the agent as its GitHub App; and *Release review action*. |
 | [`specs/`](specs) | Feature specs, the agent's input. [`specs/README.md`](specs/README.md) has the template. |
@@ -189,12 +189,12 @@ The agent runs unattended on input that might not be trustworthy, so its limits 
 - **No shell.** The agent can read, write and search files, and it has one tool that runs `npm run check`. A permission hook decides every tool call. Writes are allowed only inside the target directory, never in the files that define how the checks run or the repo's workflows, and never in files that may hold credentials.
 - **Independent verification.** After the agent finishes, the harness re-runs the checks. It confirms that git's branch, commit, config and hooks are unchanged, that every changed file is in scope, and that nothing in the diff, PR body or comments looks like a credential. If any check fails, nothing is committed. CI then runs the checks again on a clean checkout.
 - **Bounded.** Each run has turn and budget limits. The fix cycle stops after 5 fix commits, or as soon as a finding comes back. It only touches PRs that the agent's App opened, and it never merges.
-- **Auditable.** Every run has an id that appears in its commits (`Agent-Run` trailer), PR body and comments. It writes a redacted JSONL audit log with the full transcript, every permission decision and a categorized outcome, and CI keeps that log as an artifact. In CI, agent-written tests run in a sandbox that can't reach the log. Metrics come from that log, and the agent can also send OpenTelemetry data to an existing monitoring stack. See [Audit log and monitoring](agent/README.md#audit-log-and-monitoring).
-- **Model-written code never runs where the secrets are.** In CI, the tests the agent writes run in a throwaway Docker container with no network, no secrets, no view of the audit log and a read-only `.git`. See [the checks sandbox](agent/README.md#the-checks-sandbox).
+- **Auditable.** Every run has an id that appears in its commits (`Agent-Run` trailer), PR body and comments. It writes a redacted JSONL audit log with the full transcript, every permission decision and a categorized outcome, and CI keeps that log as an artifact. In CI, agent-written tests run in a sandbox that can't reach the log. Metrics come from that log, and the agent can also send OpenTelemetry data to an existing monitoring stack. See [Audit log and monitoring](spec-coding-agent/README.md#audit-log-and-monitoring).
+- **Model-written code never runs where the secrets are.** In CI, the tests the agent writes run in a throwaway Docker container with no network, no secrets, no view of the audit log and a read-only `.git`. See [the checks sandbox](spec-coding-agent/README.md#the-checks-sandbox).
 - **Untrusted input stays data.** Specs, PR diffs and review findings reach the model as data, never as commands to run. The agent has no shell to run them with, and the review action executes nothing from model output. The workflows use least-privilege permissions.
 - **The supply chain is pinned.** Every third-party action runs at a full commit SHA, not a tag that can be moved. Dependabot proposes updates to actions and npm packages weekly, a week after each release, when a compromised release has usually been caught. A dependency bump that changes the review action's bundle is rebuilt by a person, not by a workflow with a write token.
 
-[`agent/README.md`](agent/README.md) has the full list, including what these defenses don't cover.
+[`spec-coding-agent/README.md`](spec-coding-agent/README.md) has the full list, including what these defenses don't cover.
 
 ## Why two models
 
@@ -236,9 +236,9 @@ The reviewer's findings are advice. The agent may decline a finding with a reaso
 
 ```sh
 npm ci
-npm run check            # lint, typecheck and tests in every workspace: run before every commit
-npm test -w agent        # one workspace
-npm run build            # review-action bundles to dist/, which is committed
+npm run check                  # lint, typecheck and tests in every workspace: run before every commit
+npm test -w spec-coding-agent  # one workspace
+npm run build                  # review-action bundles to dist/, which is committed
 ```
 
 The review action is released from the Actions tab: the *Release review action* workflow creates a `vX.Y.Z` release and moves `v1` to it. See [Versions](review-action/README.md#versions).

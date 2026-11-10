@@ -1,6 +1,6 @@
 # Specs
 
-Each spec is a markdown file the [agent](../agent) implements as one pull request. Write it the way you would brief a strong engineer who is new to the codebase: say what and why, and leave the how to them unless it matters.
+Each spec is a markdown file the [agent](../spec-coding-agent) implements as one pull request. Write it the way you would brief a strong engineer who is new to the codebase: say what and why, and leave the how to them unless it matters.
 
 The easiest way to write one is the `/write-spec` skill in Claude Code:
 

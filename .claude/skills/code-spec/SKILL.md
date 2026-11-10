@@ -21,7 +21,7 @@ This repo demonstrates **spec → code → PR → AI review → human approves**
 | CI fix cycle on review findings | No. Run `/fix-review` here. | Yes, automatic | No: it only runs on PRs the App opened. The agent's `--fix-pr` mode runs it locally. |
 | Options | Any scope and base | `main` only, scope `demo-app`, org standards always on | Any scope and base |
 
-Every mode follows the same brief and rules, so the PR looks the same to a reviewer. The difference is who enforces them, and who the PR comes from. The agent's docs are the source of truth for its behavior: [`agent/README.md`](../../../agent/README.md), [`agent/prompt.md`](../../../agent/prompt.md) and `npm run agent -- --help`. Check them when this file and the code disagree.
+Every mode follows the same brief and rules, so the PR looks the same to a reviewer. The difference is who enforces them, and who the PR comes from. The agent's docs are the source of truth for its behavior: [`spec-coding-agent/README.md`](../../../spec-coding-agent/README.md), [`spec-coding-agent/prompt.md`](../../../spec-coding-agent/prompt.md) and `npm run agent -- --help`. Check them when this file and the code disagree.
 
 Never commit the agent's output by hand, and never push session-written code to an `agent/*` branch. The branch prefix tells reviewers who wrote the code.
 
@@ -69,7 +69,7 @@ If the user already said who codes it ("do it yourself", "with the agent"), don'
 
 Settle these yourself and state them:
 
-- **Scope.** The default is `demo-app`. If the spec changes other workspaces (for example `agent/`, `standards/`, `review-action/`), include each one and point it out. The scope limits what may change in every mode. The agent in CI always runs with `demo-app`, so if the spec needs more, it isn't an option.
+- **Scope.** The default is `demo-app`. If the spec changes other workspaces (for example `spec-coding-agent/`, `standards/`, `review-action/`), include each one and point it out. The scope limits what may change in every mode. The agent in CI always runs with `demo-app`, so if the spec needs more, it isn't an option.
 - **Local agent:** pass the scope as one `--scope <dir>` per directory. Leave it out only when the scope is exactly `demo-app`, the agent's default. A scope you state but don't pass makes the agent run with its default, and the run then fails the scope gate after spending money. If the base isn't `main`, pass `--base <base>`. Use `--sandbox docker` if `docker info` succeeded, otherwise `--sandbox none`. Keep the default limits (`--max-turns 60`, `--max-budget 5`, `--effort high`) unless the spec is large or a previous run hit a limit. With standards: `--standards org-standards --standards-ref <short SHA of the base>`.
 
 Then follow the step for the chosen mode: 4a for the local agent, 4b for the agent in CI, 4c for this session.
@@ -112,7 +112,7 @@ You do the agent's job and the harness's job, under the same rules.
 
 **Branch, then snapshot.** `git switch -c spec/<name>` from the up-to-date base. Then, before any other change, save the git state that gate 2 compares against to files in your scratchpad (or another temp directory outside the repo): the output of `ls -la .git/hooks` and of `git config --local --list`. Taking it after the branch exists means config written by branch creation itself (for example with `branch.autoSetupMerge`) doesn't trip the gate. The agent's harness uses the same order.
 
-**Brief.** Follow [`agent/prompt.md`](../../../agent/prompt.md) as your brief, with the scope from step 3 as the writable directories:
+**Brief.** Follow [`spec-coding-agent/prompt.md`](../../../spec-coding-agent/prompt.md) as your brief, with the scope from step 3 as the writable directories:
 
 1. Read `CLAUDE.md` and the existing code in scope to learn the conventions.
 2. Plan the change before editing. Keep the plan: it goes in the PR body.
@@ -122,7 +122,7 @@ You do the agent's job and the harness's job, under the same rules.
 **Rules, the same as the agent's:**
 
 - Only create or edit files inside the scope.
-- Don't touch protected config: `package.json`, `package-lock.json`, `.npmrc`, `.gitignore`, `.gitattributes`, `tsconfig*.json`, ESLint, Vite or Vitest config, anything under `node_modules/` or `.git/`. The agent can't change these either (see `isProtectedConfig` in `agent/src/policy.ts`). If the spec truly needs one changed (for example a new dependency), stop and ask the user.
+- Don't touch protected config: `package.json`, `package-lock.json`, `.npmrc`, `.gitignore`, `.gitattributes`, `tsconfig*.json`, ESLint, Vite or Vitest config, anything under `node_modules/` or `.git/`. The agent can't change these either (see `isProtectedConfig` in `spec-coding-agent/src/policy.ts`). If the spec truly needs one changed (for example a new dependency), stop and ask the user.
 - Don't read secret files: `.env` (`.env.example` is fine), `CLAUDE.local.md`, `.npmrc`, `*.pem`, `*.key`, `*.p12`, `*.pfx`.
 - If the spec is ambiguous, choose the simplest reasonable interpretation and record it for the PR's notes. Don't stop to ask unless you are blocked.
 - **With standards:** read the standards in `org-standards/` marked `use: agent` (format: `org-standards/README.md`) and apply each to the files its globs match, code and tests alike. A standard wins over a conflicting spec: follow the standard and explain the conflict in the notes.
@@ -131,7 +131,7 @@ You do the agent's job and the harness's job, under the same rules.
 
 1. **Scope.** Every path in `git status --porcelain` is inside the scope, and none is protected config.
 2. **Git state.** No commits were made and no hooks or git config changed during the work: `git log <base>..HEAD` is empty, and running `ls -la .git/hooks` and `git config --local --list` again gives exactly what you saved in the snapshot (compare with `diff`). If there is no snapshot, say so: this gate can't pass without one.
-3. **Secrets.** Scan every changed file in full, new untracked files included, and the PR body, for the credential formats the agent's harness checks (`SECRET_PATTERNS` in `agent/src/secrets.ts`). A plain `git diff` misses untracked files, which are most of a session-mode change, so list the files with `git ls-files -m -o --exclude-standard` (modified plus untracked, not ignored). Write the PR body to a file in your scratchpad first, then:
+3. **Secrets.** Scan every changed file in full, new untracked files included, and the PR body, for the credential formats the agent's harness checks (`SECRET_PATTERNS` in `spec-coding-agent/src/secrets.ts`). A plain `git diff` misses untracked files, which are most of a session-mode change, so list the files with `git ls-files -m -o --exclude-standard` (modified plus untracked, not ignored). Write the PR body to a file in your scratchpad first, then:
 
    ```sh
    PATTERNS='sk-ant-[A-Za-z0-9_-]{20,}|gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}|AKIA[0-9A-Z]{16}|-----BEGIN [A-Z ]*PRIVATE KEY-----|[a-z][a-z0-9+.-]*://[^[:space:]:@/]+:[^[:space:]@/]+@'
@@ -142,7 +142,7 @@ You do the agent's job and the harness's job, under the same rules.
 
 **Confirm, then publish.** Show the user the summary, the plan, the files changed (`git diff --stat`) and any notes, and offer to show the full diff. Commit, push and open the PR only after a clear yes:
 
-Title and body follow the repo's PR template, `.github/pull_request_template.md` on the base, the same way the agent's PRs do (spec 004, `prTitle` and `prBody` in `agent/src/pr.ts`). Read the template before writing either.
+Title and body follow the repo's PR template, `.github/pull_request_template.md` on the base, the same way the agent's PRs do (spec 004, `prTitle` and `prBody` in `spec-coding-agent/src/pr.ts`). Read the template before writing either.
 
 - **Title:** the rule in the template's opening comment. In this repo: `SPEC-<number> <spec title>`, where the number is the spec file's leading digits padded to three (`specs/004-x.md` gives `SPEC-004`), at most 72 characters including the ID. A longer one is cut to 71, trailing whitespace trimmed, and `…` appended.
 - **Commit:** the PR title as the subject. The body says `Implements specs/<file>.md in a Claude Code session.`, then the summary, then the attribution trailer this session uses.

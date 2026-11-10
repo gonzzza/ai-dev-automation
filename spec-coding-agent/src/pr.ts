@@ -98,7 +98,7 @@ export function prBody({ spec, run, files, model, base, repoUrl, runId, standard
   const link = (text: string, path: string, kind: "blob" | "tree") =>
     repoUrl ? `[${text}](${repoUrl}/${kind}/${base}/${path})` : text;
   const opening =
-    `> 🤖 Opened by the ${link("spec-driven agent", "agent", "tree")} from ${link(`\`${spec.path}\``, spec.path, "blob")}. ` +
+    `> 🤖 Opened by the ${link("spec-driven agent", "spec-coding-agent", "tree")} from ${link(`\`${spec.path}\``, spec.path, "blob")}. ` +
     "A human reviews and merges.";
   const plan = ["## Plan", report.plan.map((step, i) => `${i + 1}. ${step}`).join("\n")];
   // With a template, its sections replace Summary and Testing, and the harness line gets its own heading.

@@ -11,7 +11,7 @@
     "standards",
     "demo-app",
     "review-action",
-    "agent"
+    "spec-coding-agent"
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",
@@ -19,8 +19,8 @@
     "typecheck": "npm run typecheck --workspaces --if-present",
     "lint": "eslint .",
     "check": "npm run lint && npm run typecheck && npm test && npm run spec:check",
-    "spec:check": "npm run spec:check -w agent",
-    "agent": "npm start -w agent --"
+    "spec:check": "npm run spec:check -w spec-coding-agent",
+    "agent": "npm start -w spec-coding-agent --"
   },
   "devDependencies": {
     "@eslint/js": "^10.0.1",

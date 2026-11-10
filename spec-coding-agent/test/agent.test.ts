@@ -140,7 +140,7 @@ describe("agentOptions", () => {
     expect(options.permissionMode).toBe("default");
     expect(options.settingSources).toEqual(["project"]);
 
-    const outside = { file_path: join(repoRoot, "agent", "src", "policy.ts"), content: "x" };
+    const outside = { file_path: join(repoRoot, "spec-coding-agent", "src", "policy.ts"), content: "x" };
     const signal = new AbortController().signal;
     const viaCanUseTool = await options.canUseTool!("Write", outside, { signal, suggestions: [], toolUseID: "1" } as never);
     expect(viaCanUseTool).toMatchObject({ behavior: "deny" });
