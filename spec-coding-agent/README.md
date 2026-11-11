@@ -246,7 +246,7 @@ The rules that must hold no matter what the model does are in TypeScript: the pe
 ## Development
 
 ```sh
-npm test -w agent
+npm test -w spec-coding-agent
 ```
 
 Tests cover:

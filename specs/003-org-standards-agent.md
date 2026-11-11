@@ -9,7 +9,7 @@ Spec 002 made the AI review check pull requests against the org standards in `or
 - `selectStandards` (in `standards/src/select.ts`) makes `paths` optional in `SelectOptions`. When `paths` is omitted, `applies_to` globs are not checked: every standard for `use` is a candidate. Ordering and the `maxChars` budget work as before, and calls that pass `paths` behave exactly as today.
 
 ### Loading in the agent
-- New module `agent/src/standards.ts`, importing from the `standards` package (already a dependency of `agent`, so don't edit any `package.json`).
+- New module `spec-coding-agent/src/standards.ts`, importing from the `standards` package (already a dependency of `spec-coding-agent`, so don't edit any `package.json`).
 - `loadAgentStandards(options, runLog?)`, where `options` is `{ path?: string; packs: string[]; ref?: string; maxChars: number }`:
   - Returns `undefined` when `path` is missing or empty, and the agent then behaves exactly as it does today.
   - Otherwise it loads the standards with `loadStandards(path, packs)`, selects them with `selectStandards(…, { use: "agent", maxChars })` and no `paths` (the agent can't know which files it will create), and returns `{ standards: Standard[]; checked: string[]; dropped: string[]; ref?: string }`.
@@ -42,12 +42,12 @@ Spec 002 made the AI review check pull requests against the org standards in `or
 
 ## Acceptance criteria
 - AC1: `selectStandards` without `paths` keeps every standard for the requested `use`, whatever its `applies_to`, ordered by severity then id and trimmed to `maxChars` from the least severe end. The existing tests with `paths` still pass unchanged.
-- AC2: `loadAgentStandards` returns `undefined` for a missing or empty path. For a fixture directory it returns only `use: agent` standards from the requested packs, with `checked`, `dropped` and `ref`. It throws `RangeError` naming `--max-standards-chars` for `0`, `-1`, `1.5` and `NaN`. It throws `StandardsError` for a missing directory and an unknown pack. Fixtures live under `agent/test/fixtures/`.
+- AC2: `loadAgentStandards` returns `undefined` for a missing or empty path. For a fixture directory it returns only `use: agent` standards from the requested packs, with `checked`, `dropped` and `ref`. It throws `RangeError` naming `--max-standards-chars` for `0`, `-1`, `1.5` and `NaN`. It throws `StandardsError` for a missing directory and an unknown pack. Fixtures live under `spec-coding-agent/test/fixtures/`.
 - AC3: `loadAgentStandards` logs exactly one `standards.loaded` event with `path`, `ref`, `packs`, `checked` and `dropped` to an in-memory `RunLog`, and logs nothing when it returns `undefined`.
 - AC4: `standardsPrompt` renders the instruction (including that a standard wins over a conflicting spec or finding, with the conflict recorded in `notes`), then one element per standard in the given order, showing `applies_to` globs or `all files`, with `<`, `&` and `"` escaped in attributes and bodies.
 - AC5: `systemPromptOption([])` deep-equals `{ type: "preset", preset: "claude_code" }` with no `append` key. With standards, it adds `append` equal to `standardsPrompt` of the same list.
 - AC6: `prBody` with `standards` has a `## Standards` section listing the checked ids, the ref and the dropped ids, placed before `## Files changed`. Without `standards`, it equals the output from before this change for the same input.
-- AC7: `agent/README.md` documents the four options and explains that standards are trusted operator input in the system prompt, and that they win over a conflicting spec or finding. Tests use fixtures and in-memory logs only: no network and no Anthropic calls.
+- AC7: `spec-coding-agent/README.md` documents the four options and explains that standards are trusted operator input in the system prompt, and that they win over a conflicting spec or finding. Tests use fixtures and in-memory logs only: no network and no Anthropic calls.
 
 ## Out of scope
 - Filtering standards by the files the agent ends up touching, or reloading them mid-run.

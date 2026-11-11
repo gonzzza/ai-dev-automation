@@ -51,7 +51,7 @@ export interface AgentRun<Report = AgentReport> {
   durationMs: number;
 }
 
-/** The agent's instructions live in agent/prompt.md so they can be edited as prose; guardrails stay in code. */
+/** The agent's instructions live in spec-coding-agent/prompt.md so they can be edited as prose; guardrails stay in code. */
 export const PROMPT_FILE = fileURLToPath(new URL("../prompt.md", import.meta.url));
 
 export async function loadPromptTemplate(path: string = PROMPT_FILE): Promise<string> {
@@ -85,7 +85,7 @@ export interface AgentTask<Report> {
   schema: z.ZodType<Report>;
 }
 
-/** The implement-a-spec task, from agent/prompt.md. */
+/** The implement-a-spec task, from spec-coding-agent/prompt.md. */
 export async function specTask(spec: Spec, writableDirs: string[], prTemplate?: PrTemplate): Promise<AgentTask<AgentReport>> {
   return { prompt: buildPrompt(await loadPromptTemplate(), spec, writableDirs, prTemplate), schema: AgentReportSchema };
 }

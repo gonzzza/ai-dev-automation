@@ -59,7 +59,7 @@ describe("scopeDir", () => {
   const root = resolve("/repo");
   it("normalizes relative, trailing-slash and absolute forms to a repo-relative dir", () => {
     for (const dir of ["demo-app", "./demo-app", "demo-app/", resolve(root, "demo-app")]) expect(scopeDir(root, root, dir)).toBe("demo-app");
-    expect(scopeDir(root, resolve(root, "agent"), "../demo-app/src")).toBe("demo-app/src");
+    expect(scopeDir(root, resolve(root, "spec-coding-agent"), "../demo-app/src")).toBe("demo-app/src");
   });
 
   it("rejects the repo root and paths outside the repo", () => {

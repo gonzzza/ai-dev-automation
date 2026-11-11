@@ -124,7 +124,7 @@ describe("standardsPrompt", () => {
   });
 });
 
-describe("agent/README.md", () => {
+describe("spec-coding-agent/README.md", () => {
   it("AC7: documents the four options, that standards are trusted input in the system prompt, and that they win over conflicts", async () => {
     const readme = await readFile(fileURLToPath(new URL("../README.md", import.meta.url)), "utf8");
     for (const option of ["--standards <dir>", "--standards-packs <list>", "--standards-ref <label>", "--max-standards-chars <n>"]) {

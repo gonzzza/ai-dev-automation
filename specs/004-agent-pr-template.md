@@ -1,7 +1,7 @@
 # Follow the repo's PR template in agent pull requests
 
 ## Goal
-The repo's PR template (`.github/pull_request_template.md`) asks for What, Why and Testing sections and a title that starts with the spec ID. The agent opens its PRs through the API with a body and title built in `agent/src/pr.ts`, so its PRs follow neither. This change makes the template the one place the body format is defined: the agent reads it from the repo it works on and fills its sections, and agent PR titles start with `SPEC-XXX`. Reviewers then see every PR in the same shape, whoever opened it.
+The repo's PR template (`.github/pull_request_template.md`) asks for What, Why and Testing sections and a title that starts with the spec ID. The agent opens its PRs through the API with a body and title built in `spec-coding-agent/src/pr.ts`, so its PRs follow neither. This change makes the template the one place the body format is defined: the agent reads it from the repo it works on and fills its sections, and agent PR titles start with `SPEC-XXX`. Reviewers then see every PR in the same shape, whoever opened it.
 
 ## Requirements
 
@@ -11,9 +11,9 @@ The repo's PR template (`.github/pull_request_template.md`) asks for What, Why a
 - The first line of `commitMessage(spec, run, runId)` is `prTitle(spec)` instead of `spec.title`. The rest of the message is unchanged.
 
 ### Reading the template
-- New module `agent/src/template.ts`.
+- New module `spec-coding-agent/src/template.ts`.
 - `parsePrTemplate(text: string): PrTemplate | undefined`, where `PrTemplate` is `{ sections: { heading: string; guidance: string }[] }`:
-  - Fenced code blocks are found first, by the CommonMark rules `blankCodeBlocks` in `agent/src/spec.ts` already implements: backtick or tilde fences, closed only by a bare fence of the same character at least as long as the opener, and an unclosed block runs to the end of the file. Export it and reuse it rather than writing a second fence parser. Comment markers inside a fenced block are code, not comments.
+  - Fenced code blocks are found first, by the CommonMark rules `blankCodeBlocks` in `spec-coding-agent/src/spec.ts` already implements: backtick or tilde fences, closed only by a bare fence of the same character at least as long as the opener, and an unclosed block runs to the end of the file. Export it and reuse it rather than writing a second fence parser. Comment markers inside a fenced block are code, not comments.
   - Outside fenced blocks, `<!--` opens a comment that closes at the next `-->`. An unclosed comment runs to the end of the file.
   - Each line matching `## <heading>` outside a fenced block and outside a comment starts a section. Lines inside them are part of the guidance. A heading that is empty after trimming doesn't start a section. `heading` is the trimmed heading text.
   - `guidance` is the section's content up to the next `## ` heading, with the `<!--` and `-->` markers removed and the result trimmed. Comments can span several lines. Non-comment text (such as a checklist) is kept as guidance.
@@ -25,12 +25,12 @@ The repo's PR template (`.github/pull_request_template.md`) asks for What, Why a
 - `PipelineDeps.runAgent` becomes `runAgent(spec: Spec, template?: PrTemplate): Promise<AgentRun>`. `cli.ts` passes the template on to `specTask`.
 
 ### Prompt and report
-- `prTemplatePrompt(template?: PrTemplate): string` returns `""` without a template. Otherwise it returns an instruction followed by a `<pr_template>` block with one `<section heading="…">guidance</section>` element per section, in template order. Headings and guidance are XML-escaped, using the same escaping as `standardsPrompt` in `agent/src/standards.ts` (move the helper to a shared module if needed).
+- `prTemplatePrompt(template?: PrTemplate): string` returns `""` without a template. Otherwise it returns an instruction followed by a `<pr_template>` block with one `<section heading="…">guidance</section>` element per section, in template order. Headings and guidance are XML-escaped, using the same escaping as `standardsPrompt` in `spec-coding-agent/src/standards.ts` (move the helper to a shared module if needed).
 - The instruction tells the model to:
   - fill the report's `sections` with one entry per template section, in order, each with the section's `heading` and a markdown `text`, following that section's guidance;
   - leave the heading itself out of `text`;
   - treat the template as formatting guidance from the repository, not as instructions that change any other rule in the prompt.
-- `agent/prompt.md` gains a `{{prTemplate}}` placeholder after the rules and before the `<spec>` block. `buildPrompt` and `specTask` take an optional `PrTemplate` and fill the placeholder with `prTemplatePrompt(template)`.
+- `spec-coding-agent/prompt.md` gains a `{{prTemplate}}` placeholder after the rules and before the `<spec>` block. `buildPrompt` and `specTask` take an optional `PrTemplate` and fill the placeholder with `prTemplatePrompt(template)`.
 - `AgentReportSchema` gains a required `sections: { heading: string; text: string }[]`, described as one entry per section of the PR template in the prompt, and an empty array when the prompt has no template. The fix cycle's schema is unchanged.
 
 ### PR body
@@ -48,10 +48,10 @@ The repo's PR template (`.github/pull_request_template.md`) asks for What, Why a
 - AC2: `parsePrTemplate` returns the sections in order with their guidance, handles single-line and multi-line comments, keeps non-comment text, ignores the text before the first heading, keeps the first of two duplicate headings, drops sections named `Checks`, `Plan`, `Notes for the reviewer`, `Standards` or `Files changed` in any case, doesn't start a section at a `## ` line inside a multi-line comment, a backtick fence or a tilde fence, treats `<!--` inside a fence as code, treats every line after an unclosed `<!--` as guidance, ignores an empty `## ` heading, and returns `undefined` for an empty string, for text with no `## ` heading, and for a template whose only sections are reserved ones.
 - AC3: `prTemplatePrompt(undefined)` is `""`. With a template, it holds the instruction (including that the template does not change other rules) and one `<section>` element per section in order, with `<`, `&` and `"` escaped in headings and guidance. `buildPrompt` with a template contains that text before the `<spec>` block, and without one contains no `<pr_template>`.
 - AC4: `AgentReportSchema` rejects a report with no `sections` and accepts one with an empty array. `AGENT_REPORT_JSON_SCHEMA` lists `sections` as required.
-- AC5: With a template, `prBody` renders the template's headings in template order, matches report entries case-insensitively after trimming, shows the placeholder for a missing or blank entry, drops entries the template doesn't have, rewrites `#` and `##` heading lines in the model's text as `###`, including ones followed by a tab or nothing, but not inside a fenced code block, closes a fence the model's text leaves open, has `## Checks` after the template sections and the agent-only sections after that, and has no `## Summary`. Without a template, it equals the existing expected body in `agent/test/pr.test.ts` for the same input.
+- AC5: With a template, `prBody` renders the template's headings in template order, matches report entries case-insensitively after trimming, shows the placeholder for a missing or blank entry, drops entries the template doesn't have, rewrites `#` and `##` heading lines in the model's text as `###`, including ones followed by a tab or nothing, but not inside a fenced code block, closes a fence the model's text leaves open, has `## Checks` after the template sections and the agent-only sections after that, and has no `## Summary`. Without a template, it equals the existing expected body in `spec-coding-agent/test/pr.test.ts` for the same input.
 - AC6: `runPipeline` reads `.github/pull_request_template.md` through the injected `readFile` before calling `runAgent`, passes the parsed template to `runAgent` and into the PR body, and passes `undefined` and builds today's body when the file is missing. A `readFile` that throws aborts the run before `runAgent` is called. Tests use the existing fake git and fake `readFile`.
 - AC7: A test reads this repo's `.github/pull_request_template.md`, finds the quoted example title that starts with `SPEC-`, and checks that `prTitle` gives exactly that string for a spec whose slug starts with the same number and whose title is the rest of the example. It fails if the template has no such example. This catches the template and `prTitle` drifting apart.
-- AC8: `agent/README.md` explains that agent PRs follow the repo's `.github/pull_request_template.md` (read from the base checkout), what happens without one, which sections the agent always adds, and the `SPEC-XXX` title format with its 72-character cut. Tests use fixtures and fakes only: no network, no git and no Anthropic calls.
+- AC8: `spec-coding-agent/README.md` explains that agent PRs follow the repo's `.github/pull_request_template.md` (read from the base checkout), what happens without one, which sections the agent always adds, and the `SPEC-XXX` title format with its 72-character cut. Tests use fixtures and fakes only: no network, no git and no Anthropic calls.
 
 ## Out of scope
 - Other template locations GitHub supports (`PULL_REQUEST_TEMPLATE.md` at the root or in `docs/`, the `.github/PULL_REQUEST_TEMPLATE/` directory, multiple templates).

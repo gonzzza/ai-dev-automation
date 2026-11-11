@@ -397,7 +397,7 @@ describe("runFixCycle", () => {
   });
 
   it("applies the same gates as a new PR: scope, and secrets in what gets posted", async () => {
-    const outside = setup({ changed: ["agent/src/policy.ts"] });
+    const outside = setup({ changed: ["spec-coding-agent/src/policy.ts"] });
     await expect(runFixCycle(outside.deps)).rejects.toThrow("outside demo-app");
     expect(outside.git.commit).not.toHaveBeenCalled();
 
@@ -432,7 +432,7 @@ describe("failure categories for the fix cycle", () => {
     [{ head: "old999" }, "preflight"],
     [{ agentApp: "spec-agent", pr: { author: { login: "mallory" } } }, "preflight"],
     [{ tamperGit: true, changed: [] as string[] }, "git-state-changed"],
-    [{ changed: ["agent/src/policy.ts"] }, "out-of-scope"],
+    [{ changed: ["spec-coding-agent/src/policy.ts"] }, "out-of-scope"],
     [{ agentReport: report({ summary: "Used key sk-test-value-from-the-env" }) }, "secret-found"],
   ])("classifies the failure for %o as %s", async (options, category) => {
     const { deps } = setup(options);

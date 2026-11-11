@@ -1,6 +1,6 @@
 # Org engineering standards
 
-This directory stands in for a **separate platform repo** that owns the engineering standards every repo is held to. In a real setup it would live in its own repository; it sits here so the demo is self-contained. The AI review action checks pull requests against it (see [`review-action/README.md`](../review-action/README.md#org-standards)), and the agent gets the same standards in its system prompt (see [`agent/README.md`](../agent/README.md)).
+This directory stands in for a **separate platform repo** that owns the engineering standards every repo is held to. In a real setup it would live in its own repository; it sits here so the demo is self-contained. The AI review action checks pull requests against it (see [`review-action/README.md`](../review-action/README.md#org-standards)), and the agent gets the same standards in its system prompt (see [`spec-coding-agent/README.md`](../spec-coding-agent/README.md)).
 
 The review and fix jobs read these files from the PR's **base** commit, never from the PR head, so a PR can't change the standards it is reviewed and fixed against. That isn't a version pin: the base follows `main`, so a change merged here applies to the next PR. In a real setup, each repo pins a tag of the standards repo and takes new versions through a bump PR (see [Org standards](../README.md#org-standards)).
 
