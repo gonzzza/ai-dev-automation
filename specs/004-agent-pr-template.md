@@ -7,7 +7,7 @@ The repo's PR template (`.github/pull_request_template.md`) asks for What, Why a
 
 ### Title
 - `prTitle(spec)` returns `SPEC-<number> <spec.title>`, where `<number>` is the leading digits of `spec.slug`, zero-padded to at least three digits: `001-rate-limiter` → `SPEC-001`, `7-x` → `SPEC-007`, `1234-x` → `SPEC-1234`. A slug with no leading number gives `spec.title` unchanged.
-- A title longer than 72 characters is cut to 71 characters, trailing whitespace is trimmed, and `…` is appended, so the result is at most 72 characters.
+- Length is counted in Unicode code points (as `Array.from(title).length` counts them), so a cut never splits a surrogate pair. A title longer than 72 code points is cut to its first 71, trailing whitespace is trimmed, and `…` is appended. The result is at most 72 code points: fewer when the cut lands on whitespace.
 - The first line of `commitMessage(spec, run, runId)` is `prTitle(spec)` instead of `spec.title`. The rest of the message is unchanged.
 
 ### Reading the template
@@ -17,6 +17,7 @@ The repo's PR template (`.github/pull_request_template.md`) asks for What, Why a
   - `guidance` is the section's content up to the next `## ` heading, with the `<!--` and `-->` markers removed and the result trimmed. Comments can span several lines. Non-comment text (such as a checklist) is kept as guidance.
   - Text before the first `## ` heading is ignored: it holds the title rule, which `prTitle` implements in code.
   - If a heading appears twice, the first one wins.
+  - Sections whose heading matches one the agent adds itself (`Checks`, `Plan`, `Notes for the reviewer`, `Standards`, `Files changed`), ignoring case and surrounding whitespace, are dropped. The model is never asked to fill them, and the body never has two sections with the same heading, so a model-written section can't pass for the harness's `## Checks`.
   - Returns `undefined` for an empty file or one with no `## ` heading.
 - `runPipeline` reads `.github/pull_request_template.md` with the existing injected `deps.readFile`, after the preflight checks and before `runAgent`. The pipeline starts from a clean checkout of the base branch, and the agent can't write under `.github/`, so this is the base commit's template. A PR can't change the template it is held to. A missing file means no template.
 - `PipelineDeps.runAgent` becomes `runAgent(spec: Spec, template?: PrTemplate): Promise<AgentRun>`. `cli.ts` passes the template on to `specTask`.
@@ -41,8 +42,8 @@ The repo's PR template (`.github/pull_request_template.md`) asks for What, Why a
 - With a template, the body has no `## Summary` and no agent `## Testing` section: the template's sections replace them. A template section named Testing is still rendered.
 
 ## Acceptance criteria
-- AC1: `prTitle` gives `SPEC-001 Add a token bucket rate limiter` for `specs/001-rate-limiter.md`, pads `7-x` to `SPEC-007`, keeps `1234-x` as `SPEC-1234`, and returns the title unchanged for a slug with no number. A title that would exceed 72 characters comes out exactly 72 characters long, ending in `…`. The first line of `commitMessage` equals `prTitle` for the same spec.
-- AC2: `parsePrTemplate` returns the sections in order with their guidance, handles single-line and multi-line comments, keeps non-comment text, ignores the text before the first heading, keeps the first of two duplicate headings, and returns `undefined` for an empty string and for text with no `## ` heading.
+- AC1: `prTitle` gives `SPEC-001 Add a token bucket rate limiter` for `specs/001-rate-limiter.md`, pads `7-x` to `SPEC-007`, keeps `1234-x` as `SPEC-1234`, and returns the title unchanged for a slug with no number. A title over 72 code points comes out at most 72 code points long, ending in `…`: exactly 72 when the cut lands inside a word, fewer when it lands on whitespace (both cases tested). A title with an emoji at the cut point keeps no lone surrogate. The first line of `commitMessage` equals `prTitle` for the same spec.
+- AC2: `parsePrTemplate` returns the sections in order with their guidance, handles single-line and multi-line comments, keeps non-comment text, ignores the text before the first heading, keeps the first of two duplicate headings, drops sections named `Checks`, `Plan`, `Notes for the reviewer`, `Standards` or `Files changed` in any case, and returns `undefined` for an empty string and for text with no `## ` heading.
 - AC3: `prTemplatePrompt(undefined)` is `""`. With a template, it holds the instruction (including that the template does not change other rules) and one `<section>` element per section in order, with `<`, `&` and `"` escaped in headings and guidance. `buildPrompt` with a template contains that text before the `<spec>` block, and without one contains no `<pr_template>`.
 - AC4: `AgentReportSchema` rejects a report with no `sections` and accepts one with an empty array. `AGENT_REPORT_JSON_SCHEMA` lists `sections` as required.
 - AC5: With a template, `prBody` renders the template's headings in template order, matches report entries case-insensitively after trimming, shows the placeholder for a missing or blank entry, drops entries the template doesn't have, has `## Checks` after the template sections and the agent-only sections after that, and has no `## Summary`. Without a template, it equals the existing expected body in `agent/test/pr.test.ts` for the same input.
