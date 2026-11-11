@@ -45,21 +45,26 @@ These checks only read state. Don't switch, stash or reset without the user's OK
 
 - If the current branch is the PR's `headRefName` and `git status --porcelain` is empty, work here.
 - Otherwise, offer the user a choice:
-  - *A separate worktree (Recommended when the tree is dirty or on another branch):* `git worktree add <scratchpad>/wt-<n> <headRefName>`, then `npm ci` in it, because `npm run check` needs `node_modules`. The user's checkout stays as it is.
+  - *A separate worktree (Recommended when the tree is dirty or on another branch):* `git fetch origin`, then `git worktree add --detach <scratchpad>/wt-<n> origin/<headRefName>`, then `npm ci` in it, because `npm run check` needs `node_modules`. The user's checkout stays as it is. `--detach` matters: git refuses to check out a branch that is already checked out elsewhere, which is the case when the user is on the PR branch with uncommitted changes. You push with `git push origin HEAD:<headRefName>` (step 7).
   - *Switch here:* only if the tree is clean. `git switch <headRefName>`.
-- In the tree you'll use: `git fetch origin` and check that `HEAD` equals `origin/<headRefName>` equals `headRefOid`. Behind: `git pull --ff-only`. Ahead or diverged: the local branch has unpushed commits, so ask the user.
+- In the tree you'll use: `git fetch origin` and check that `HEAD` equals `origin/<headRefName>` equals `headRefOid` (a fresh detached worktree matches by construction). Behind: `git pull --ff-only`. Ahead or diverged: the local branch has unpushed commits, so ask the user.
+
+Run every `gh` command from inside that tree, not from the scratchpad: `gh` fills in `{owner}/{repo}` from the current directory's git remote, and fails outside a repository. Keep the files you post (replies, comments) in the scratchpad and pass their full paths.
 
 Then take the git-state snapshot that gate 2 compares against: save `ls -la .git/hooks` (in a worktree, the hooks of the main repo: `git rev-parse --git-common-dir`) and `git config --local --list` to files in your scratchpad.
 
 ## 3. Get the findings from the latest review
 
-1. **The review must be for the PR's head commit.** Find its run: `gh run list --workflow "AI review" --commit <headRefOid> --json databaseId,status,conclusion,url`. If it's queued or in progress, start `gh run watch <id> --exit-status` with `run_in_background`, and wait for the notification. Don't poll. If there's no run, the PR may be a draft, or it may not have triggered yet: retry once after a few seconds, then tell the user.
+1. **The review must be for the PR's head commit.** Find its run: `gh run list --workflow "AI review" --commit <headRefOid> --json databaseId,status,conclusion,url`. If it's queued or in progress, start `gh run watch <id> --exit-status` with `run_in_background`, and wait for the notification. Don't poll. If there's no run yet, GitHub may not have started it: after a push that can take a minute or more. Start a loop with `run_in_background` that checks every 10 seconds for up to 5 minutes, then watches the run once it appears. If none appears, the PR may be a draft: tell the user.
 2. **Read the review.** It's the last review on the PR whose body starts with `<!-- ai-dev-automation:review -->` *and* whose author is the account the action posts as (`github-actions[bot]` in this repo). Check the author: anyone can paste the marker into a review of their own.
 
    ```sh
    gh api repos/{owner}/{repo}/pulls/<n>/reviews --paginate \
-     --jq '[.[] | select(.user.login == "github-actions[bot]" and (.body | startswith("<!-- ai-dev-automation:review -->")))] | last | {id, commit_id, body}'
+     --jq '.[] | select(.user.login == "github-actions[bot]" and (.body | startswith("<!-- ai-dev-automation:review -->"))) | {id, commit_id, body}' \
+     | tail -n 1
    ```
+
+   `--paginate` runs the `--jq` filter once per page, so a `last` inside it would pick the last review of each page. Print every match, one JSON line each, and take the final line: pages come oldest first.
 
    Its `commit_id` must equal `headRefOid`. If it doesn't, the review is stale: go back to 1.
 3. **Collect the findings.**
@@ -119,8 +124,10 @@ If a gate fails, fix the cause or stop and tell the user.
 
 Show the user one line per finding (fixed or declined, and why), `git diff --stat`, and offer the full diff. Then, after a clear yes:
 
+If every finding was declined, nothing changed: skip the commit and the push, do 3 and 4, and end the loop there, as the agent's CI cycle does. Without a push there is no new review to wait for, and the declined findings wait on their threads for the user.
+
 1. **Commit.** Subject `Address AI review findings (fix cycle <n>)`. The body is a short summary, then the trailers: `Fix-Cycle: <n>`, one `Fix-Addressed: <category> <line> <path>` per finding worked on, then the attribution trailer this session uses.
-2. **Push.** `git push`. Never force-push.
+2. **Push.** `git push origin HEAD:<headRefName>`, which works from a branch and from a detached worktree. Never force-push.
 3. **Reply on each finding's thread**, posting the body from a file (`gh api --method POST repos/{owner}/{repo}/pulls/<n>/comments/<id>/replies --input <file.json>` with `{"body": ...}`):
    - Fixed: `🤖 **Fixed in <short sha>** (fix cycle <n>, Claude Code session).` and a sentence on what changed. Then resolve the thread. Threads are only addressable through GraphQL: find the thread whose first comment's `databaseId` is the comment id, as `resolveReviewThread` in `agent/src/git.ts` does, and run the `resolveReviewThread` mutation on it.
    - Declined: `🤖 **Declined** in fix cycle <n> (Claude Code session); left for a human reviewer.` and the reason. Leave the thread open.
@@ -130,7 +137,7 @@ The replies post as the user's GitHub account. The `Claude Code session` tag say
 
 ## 8. Next cycle
 
-The push triggers the AI review on the new head. Go back to step 3: wait for that run in the background, read its findings and decide on the next cycle. Ask before each new cycle: "Review found N findings, run cycle <n+1>?"
+The push triggers the AI review on the new head. First re-read the head: `git fetch origin` and `gh pr view <n> --json headRefOid`. It should be the commit you pushed; if it isn't, someone else pushed too, so stop and tell the user. Then go back to step 3 with the new `headRefOid`: wait for that run in the background, read its findings and decide on the next cycle. Ask before each new cycle: "Review found N findings, run cycle <n+1>?"
 
 The loop ends when the review is clean, at the limit, on a repeat, or when the user stops it.
 
