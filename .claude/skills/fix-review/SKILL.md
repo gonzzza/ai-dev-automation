@@ -32,7 +32,7 @@ The PR: $ARGUMENTS
 
 - A number or URL: use it. Nothing given: `gh pr view --json number` for the current branch. If that fails, list the user's open PRs (`gh pr list --author @me`) and ask.
 - Read it: `gh pr view <n> --json number,url,state,isDraft,isCrossRepository,headRefName,headRefOid,baseRefName,author,files`.
-- **Check the branch name before using it anywhere.** `headRefName` is chosen by the PR's author, and it goes into git commands. Git allows `$`, `;`, `&` and backticks in branch names. Refuse a name that doesn't match `^[A-Za-z0-9._/-]+$`, and quote it in every command anyway.
+- **Check the branch name before using it anywhere.** `headRefName` is chosen by the PR's author, and it goes into git commands. Git allows `$`, `;`, `&` and backticks in branch names. Refuse a name that doesn't match `^[A-Za-z0-9][A-Za-z0-9._/-]*$` or that contains `..`. The first character must be a letter or digit, so a name like `--orphan` can't be read as an option. Quote the name in every command anyway.
 - **Check whose PR it is.** Compare `author.login` with `gh api user --jq .login`. If they differ, the cycle would push to someone else's branch and post replies as the user: say so, and go on only after an explicit yes.
 - **Refuse** and say why:
   - The PR is closed or merged.
@@ -48,7 +48,7 @@ These checks only read state. Don't switch, stash or reset without the user's OK
 - If the current branch is the PR's `headRefName` and `git status --porcelain` is empty, work here.
 - Otherwise, offer the user a choice:
   - *A separate worktree (Recommended when the tree is dirty or on another branch):* `git fetch origin`, then `git worktree add --detach <scratchpad>/wt-<n> origin/<headRefName>`, then `npm ci` in it, because `npm run check` needs `node_modules`. The user's checkout stays as it is. `--detach` matters: git refuses to check out a branch that is already checked out elsewhere, which is the case when the user is on the PR branch with uncommitted changes. You push with `git push origin HEAD:<headRefName>` (step 7).
-  - *Switch here:* only if the tree is clean. `git switch <headRefName>`.
+  - *Switch here:* only if the tree is clean. `git switch <headRefName> --`.
 - In the tree you'll use: `git fetch origin` and check that `HEAD` equals `origin/<headRefName>` equals `headRefOid` (a fresh detached worktree matches by construction). Behind: `git pull --ff-only`. Ahead or diverged: the local branch has unpushed commits, so ask the user.
 
 Run every `gh` command from inside that tree, not from the scratchpad: `gh` fills in `{owner}/{repo}` from the current directory's git remote, and fails outside a repository. Keep the files you post (replies, comments) in the scratchpad and pass their full paths.
@@ -68,7 +68,7 @@ Then take the git-state snapshot that gate 2 compares against: save `ls -la .git
 
    `--paginate` runs the `--jq` filter once per page, so a `last` inside it would pick the last review of each page. Print every match, one JSON line each, and take the final line: pages come oldest first.
 
-   Its `commit_id` must equal `headRefOid`. If it doesn't, the review is stale: go back to 1.
+   Its `commit_id` must equal `headRefOid`. If it doesn't, check the run from 1. If the run is still queued or in progress, wait for it as in 1. If it has finished, failed, been cancelled or been skipped, and there's still no review for the head, retrying won't help: report the run's conclusion and URL to the user, and stop.
 3. **Collect the findings.**
    - Inline: read them from the PR's comments endpoint, not the review's, which returns `line` as null:
 
