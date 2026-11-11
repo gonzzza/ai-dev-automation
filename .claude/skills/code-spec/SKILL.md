@@ -18,7 +18,7 @@ This repo demonstrates **spec → code → PR → AI review → human approves**
 | Gates (scope, secrets, checks) | Run by you, following step 4c | Enforced by the harness in code | Enforced by the harness in code |
 | Checks sandbox | None | Docker, always | Docker if available |
 | Audit log, `Agent-Run` trailer | No | Yes, the log kept as a run artifact | Yes, the log on this machine |
-| CI fix cycle on review findings | No. You address findings here. | Yes, automatic | No: it only runs on PRs the App opened. You address findings here. |
+| CI fix cycle on review findings | No. Run `/fix-review` here. | Yes, automatic | No: it only runs on PRs the App opened. The agent's `--fix-pr` mode runs it locally. |
 | Options | Any scope and base | `main` only, scope `demo-app`, org standards always on | Any scope and base |
 
 Every mode follows the same brief and rules, so the PR looks the same to a reviewer. The difference is who enforces them, and who the PR comes from. The agent's docs are the source of truth for its behavior: [`agent/README.md`](../../../agent/README.md), [`agent/prompt.md`](../../../agent/prompt.md) and `npm run agent -- --help`. Check them when this file and the code disagree.
@@ -165,7 +165,7 @@ Give the user:
 - **The result:** PR opened, dry run finished, or failed, and at which step.
 - **Local agent:** the run id (for example `20261109T073012Z-3f9a1c`), the audit log path (`<log dir>/<run id>.jsonl`), and the cost and turns, if printed.
 - **Agent in CI:** the workflow run's URL, the PR's author, and the cost and turns from the run's log. The audit log is the run's `agent-run-<run id>-<attempt>` artifact (`gh run download <id>`).
-- **On a PR:** the URL. The AI review runs in CI on every PR. On a PR from the agent in CI, the fix cycle may then push commits that address its findings and reply on each finding's thread. On a session PR or a local agent PR it doesn't, so offer to handle the findings here under the same rules: check each one against the code, fix the real ones with a test, decline the wrong ones with a reason, and reply on each finding's thread. Don't merge. Merging is the human's job.
+- **On a PR:** the URL. The AI review runs in CI on every PR. On a PR from the agent in CI, the fix cycle may then push commits that address its findings and reply on each finding's thread. On a session PR it doesn't, so offer `/fix-review <PR>`: it runs the same cycle here, under the same rules and limits, with the user's yes before each push. On a local agent PR, offer the agent's own fix mode (`npm run agent -- --fix-pr <PR> --findings <file>`, API spend), because session-written code never goes on an `agent/*` branch. Don't merge. Merging is the human's job.
 - **On a local agent dry run:** the branch and the changed files (`git status`, `git diff --stat`). Offer to show the diff. To open a PR next, the dry-run changes have to go and the branch must be deleted. Offer to do that, with confirmation, before a real run: switch back to the base, discard the changes, delete the branch. A real run starts fresh and costs a second run.
 - **On a local agent failure:** the error, and that the branch is kept for inspection.
 - **On an agent in CI failure:** the error, from `gh run view <id> --log-failed` and the audit log artifact. The branch only existed on the runner, so there is nothing to check out, unless the run failed after its push: check `git ls-remote --heads origin agent/<name>`, and offer to delete that branch, with confirmation, before a rerun.
