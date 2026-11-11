@@ -25,37 +25,45 @@ Today a person picks each spec and starts the agent on it by hand, one at a time
 
   ```ts
   export interface PullSummary { number: number; title: string; state: "OPEN" | "CLOSED" | "MERGED"; mergedAt: string | null }
-  export interface GithubState { pulls: readonly PullSummary[]; branches: readonly string[] }
+  export interface RunSummary { title: string; status: string; conclusion: string | null; createdAt: string }
+  export interface GithubState { pulls: readonly PullSummary[]; branches: readonly string[]; runs: readonly RunSummary[] }
   export type SpecState =
     | { status: "done"; pr: number }
-    | { status: "in-progress"; pr?: number; branch?: string }
+    | { status: "in-progress"; pr?: number; branch?: string; run?: true }
     | { status: "needs-human"; reason: "closed" | "reverted"; pr: number }
+    | { status: "needs-human"; reason: "failed"; conclusion: string }
     | { status: "blocked"; waitingOn: number[] }
     | { status: "ready" };
   export interface PlannedSpec { number: number; path: string; slug: string; state: SpecState }
   export function planSpecs(specs: readonly Spec[], github: GithubState): PlannedSpec[];
   ```
 
-- A PR belongs to spec `n` when its title matches `^SPEC-0*n ` (the agent's and session mode's title format), compared as numbers. A PR reverts spec `n` when its title starts with `Revert "SPEC-0*n ` (GitHub's revert button). `branches` holds remote branch names without `refs/heads/`. The first rule that applies decides each spec's state:
+- A PR belongs to spec `n` when its title matches `^SPEC-0*n ` (the agent's and session mode's title format), compared as numbers. A PR reverts spec `n` when its title starts with `Revert "SPEC-0*n ` (GitHub's revert button). `branches` holds remote branch names without `refs/heads/`.
+- A run belongs to a spec when its title is exactly `Implement <spec path>`. `implement-spec.yml` sets this with `run-name: Implement ${{ inputs.spec }}${{ inputs.dry-run && ' (dry run)' || '' }}`, added together with this spec. Dry runs, and runs from before that change (titled `Implement a spec`), belong to no spec. A run is in flight when its `status` isn't `completed`.
+- The first rule that applies decides each spec's state:
   1. Any open PR of the spec: `in-progress` with the lowest such PR number.
   2. A merged PR of the spec exists. If a merged revert PR has a later `mergedAt` than the latest merged PR, the state is `needs-human` / `reverted` with the revert PR's number. Otherwise it is `done` with the latest merged PR's number.
-  3. `agent/<slug>` or `spec/<slug>` is among `branches`: `in-progress` with that branch. The branch is the claim: the agent already refuses to start when its branch exists.
-  4. A closed, unmerged PR of the spec: `needs-human` / `closed` with the highest such PR number.
-  5. Every dependency is `done`: `ready`. Otherwise `blocked`, with the dependencies that aren't `done` in ascending order.
+  3. An in-flight run of the spec: `in-progress` with `run: true`.
+  4. A closed, unmerged PR of the spec: `needs-human` / `closed` with the highest such PR number. This comes before the branch rule, because GitHub keeps a branch when its PR is closed without merging.
+  5. `agent/<slug>` or `spec/<slug>` is among `branches`: `in-progress` with that branch. The branch is the claim: the agent already refuses to start when its branch exists.
+  6. The spec's most recent completed run (by `createdAt`) has a `conclusion` other than `success`: `needs-human` / `failed` with that conclusion. A run that fails before pushing leaves no branch and no PR, so without this rule the spec would look `ready` and be dispatched again.
+  7. Every dependency is `done`: `ready`. Otherwise `blocked`, with the dependencies that aren't `done` in ascending order.
 - The coordinator never retries on its own. A person re-arms a `needs-human` spec by running *Implement a spec* by hand, or by fixing what made it fail.
+- The run history the coordinator reads is the last 200 runs. A failure older than that is no longer seen, so a spec can get at most one more automatic attempt after its failure falls out of that window.
 
 ### Reading GitHub and dispatching
-- `runCoordinator(deps)` takes the parsed specs, an injected `Exec`, the repo root, `dispatch: boolean`, `maxParallel: number`, a `log(line)` function and an optional `RunLog`. It returns `{ plan: PlannedSpec[]; dispatched: string[]; inFlightRuns: number }`. It reads GitHub with exactly these commands, run in the repo root:
-  - `gh pr list --state all --base main --search "SPEC- in:title" --limit 1000 --json number,title,state,mergedAt`. If it returns 1000 PRs, it throws, because the plan could be incomplete.
+- `runCoordinator(deps)` takes the parsed specs, an injected `Exec`, the repo root, `dispatch: boolean`, `maxParallel: number`, a `log(line)` function, an injected `sleep(ms): Promise<void>` and an optional `RunLog`. It returns `{ plan: PlannedSpec[]; dispatched: string[]; inFlightRuns: number }`. It reads GitHub with exactly these commands, run in the repo root:
+  - `gh api --paginate "repos/{owner}/{repo}/pulls?state=all&base=main&per_page=100" --jq ".[] | {number, title, state, merged_at}"`: one JSON object per line, for every PR against `main`. A PR is `MERGED` when `merged_at` is set, `OPEN` when `state` is `open`, and `CLOSED` otherwise. Matching is done on the titles in code, so there is no search tokenizing and no result cap. It costs one request per 100 PRs.
   - `git ls-remote --heads origin refs/heads/agent/* refs/heads/spec/*`.
-  - `gh run list --workflow implement-spec.yml --limit 100 --json status`. A run is in flight when its `status` isn't `completed`.
+  - `gh run list --workflow implement-spec.yml --limit 200 --json displayTitle,status,conclusion,createdAt`, read into `RunSummary` with `title` from `displayTitle`.
 
   Any of them exiting non-zero throws, with the command's output, before anything is dispatched.
-- It logs one line per spec, in number order: the number, the status and the detail (`done (#33)`, `in-progress (agent/001-rate-limiter)`, `blocked: waiting on 005`, `needs-human: reverted (#41)`).
+- It logs one line per spec, in number order: the number, the status and the detail (`done (#33)`, `in-progress (agent/001-rate-limiter)`, `in-progress (run)`, `blocked: waiting on 005`, `needs-human: reverted (#41)`, `needs-human: failed (failure)`).
 - With `dispatch: false` (the default), it dispatches nothing.
-- With `dispatch: true`, it first checks the local checkout. It throws, naming the problem, unless `git rev-parse HEAD` equals `git rev-parse origin/main` and nothing under `specs/` has uncommitted changes. The workflow implements the spec as it is on `main`, so the local plan must match it.
-- With `dispatch: true` and in-flight runs, it dispatches nothing and logs how many runs it is waiting on. It dispatches one wave at a time: a run's branch only appears when it pushes, so a pass during a run can't tell which spec that run claimed.
+- With `dispatch: true`, it first checks the local checkout. It runs `git fetch origin main`, then throws, naming the problem, unless `git rev-parse HEAD` equals `git rev-parse origin/main` and nothing under `specs/` has uncommitted changes. The workflow implements the spec as it is on `main`, so the local plan must match it, and the fetch keeps a stale `origin/main` from passing the check.
+- With `dispatch: true` and any run of `implement-spec.yml` in flight, including dry runs and untitled ones, it dispatches nothing and logs how many runs it is waiting on. Dispatching one wave at a time keeps the spend of a wave bounded and the plan simple.
 - Otherwise it dispatches up to `maxParallel` `ready` specs, lowest number first, each with `gh workflow run implement-spec.yml --ref main -f spec=<repo-relative spec path>`. A failed dispatch throws and stops the rest. The ones already dispatched are in the error message.
+- `gh workflow run` returns before GitHub lists the new run. So after dispatching, it re-runs the `gh run list` command every 5 seconds, through `sleep`, until each dispatched spec has an in-flight run titled `Implement <spec path>`. If after 60 seconds any spec still has none, it throws naming those specs. A pass started after `runCoordinator` returns therefore sees the wave as in flight. Two passes started at the same moment can still both dispatch. The workflow that will run the coordinator (out of scope) prevents that with a single `concurrency` group.
 - With a `RunLog`, it logs one `plan.result` event with the plan, and one `dispatch` event per dispatched spec path.
 
 ### CLI
@@ -70,29 +78,33 @@ Today a person picks each spec and starts the agent on it by hand, one at a time
 ## Acceptance criteria
 - AC1: `parseSpec` returns `dependsOn: []` for a spec without frontmatter and for `depends_on: []`, and `[1, 3]` for `depends_on: [001, 3]`. The title, sections and criteria parse the same with or without a frontmatter block. It throws, naming the path, for an unclosed block, an unknown key, a duplicate key, a block list, `0`, `-1`, `1.5`, `abc` and a number listed twice.
 - AC2: `checkSpecs` reports a dependency on a missing number, a self-dependency and a three-spec cycle, the last as `dependency cycle: 005 → 006 → 007 → 005` (starting from its lowest number). Valid dependency graphs give no errors, and `npm run spec:check` passes on the specs in `specs/`.
-- AC3: `planSpecs` applies rules 1–4 in order:
+- AC3: `planSpecs` applies rules 1–6 in order:
   - an open PR wins over a merged one;
   - a merged PR gives `done`;
   - a later merged `Revert "SPEC-…` PR gives `needs-human` / `reverted`;
   - a revert merged before the latest merge still gives `done`;
+  - an in-flight `Implement <spec path>` run gives `in-progress` with `run: true`, even with a closed PR;
+  - a closed, unmerged PR gives `needs-human` / `closed`, even when its `agent/<slug>` branch still exists;
   - an `agent/<slug>` or `spec/<slug>` branch without a PR gives `in-progress`;
-  - a closed, unmerged PR gives `needs-human` / `closed`.
+  - with no PR, branch or in-flight run, a most recent completed run concluded `failure` or `cancelled` gives `needs-human` / `failed`, and one concluded `success` doesn't;
+  - dry-run runs and runs titled `Implement a spec` affect no spec.
 
   `SPEC-004` and `SPEC-4` both match spec 4, and `SPEC-0040` and `XSPEC-004` don't.
 - AC4: `planSpecs` marks a spec `ready` only when all its dependencies are `done`. Otherwise it is `blocked`, with the unfinished dependencies in ascending order, including ones that are `needs-human`, `in-progress` or `blocked`. The result is sorted by spec number.
-- AC5: With a fake `Exec`, `runCoordinator` runs exactly the three read commands above and builds `GithubState` from their output. It throws when any of them fails, and when `gh pr list` returns 1000 PRs. With `dispatch: false` it never calls `gh workflow run`.
+- AC5: With a fake `Exec`, `runCoordinator` runs exactly the three read commands above and builds `GithubState` from their output. It maps `open`, `closed` and `merged_at` to the three PR states, and reads every line of a multi-page `gh api` output. It throws when any read command fails. With `dispatch: false` it never runs `git fetch` or `gh workflow run`.
 - AC6: With `dispatch: true`:
   - it dispatches the `ready` specs lowest number first, at most `maxParallel` of them, with the exact `gh workflow run` arguments above;
   - it dispatches nothing while any `implement-spec.yml` run is in flight;
-  - it throws before dispatching when `HEAD` isn't `origin/main` or a file under `specs/` has uncommitted changes;
-  - when the second of three dispatches fails, it throws with the first spec's path in the message and doesn't attempt the third.
+  - it runs `git fetch origin main` before comparing, and throws before dispatching when `HEAD` isn't `origin/main` or a file under `specs/` has uncommitted changes;
+  - when the second of three dispatches fails, it throws with the first spec's path in the message and doesn't attempt the third;
+  - it returns once every dispatched spec has an in-flight run, re-listing runs through the fake `sleep`, and throws naming the missing specs when a run hasn't appeared after 60 seconds of fake time.
 - AC7: With an in-memory `RunLog`, `runCoordinator` logs one `plan.result` event and one `dispatch` event per dispatched spec, and the per-spec lines it passes to `log` match the formats above.
-- AC8: `spec-coding-agent/README.md` documents the `--plan` mode, its options and the rules for each state, including that reverts and closed PRs go to a human and are never retried. `specs/README.md` shows the optional `depends_on` frontmatter in the template and its rules. Tests use fakes only: no network, no `gh`, no git remote.
+- AC8: `spec-coding-agent/README.md` documents the `--plan` mode, its options and the rules for each state, including that reverts, closed PRs and failed runs go to a human and are never retried, and that two passes started at the same moment can both dispatch. `specs/README.md` shows the optional `depends_on` frontmatter in the template and its rules. Tests use fakes only: no network, no `gh`, no git remote.
 
 ## Out of scope
 - Running agents locally in parallel, one git worktree per spec. That is spec 006, which reuses `planSpecs`.
 - A workflow that runs `--plan --dispatch` on every merge to `main`. A human adds it after this PR, since the agent can't write under `.github/`.
-- Changes to `implement-spec.yml`, such as a `run-name` naming the spec or budget inputs.
+- Other changes to `implement-spec.yml`, such as budget inputs. Its `run-name` was added together with this spec.
 - Claim stores other than GitHub (Postgres, leases, lease expiry).
 - Retrying failed or closed runs, and re-implementing reverted specs automatically.
 - Detecting reverts whose title isn't GitHub's `Revert "SPEC-…` format, and partial reverts.
