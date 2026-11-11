@@ -2,6 +2,7 @@ import type { AgentRun } from "./agent.js";
 import { scanForSecrets, verifyChanges, type GateDeps } from "./gates.js";
 import { branchName, commitMessage, prBody, prTitle, type PrStandards } from "./pr.js";
 import type { Spec } from "./spec.js";
+import { parsePrTemplate, PR_TEMPLATE_PATH, type PrTemplate } from "./template.js";
 
 /** The git operations the pipeline needs; implemented by Git, faked in tests. */
 export interface GitOps {
@@ -27,7 +28,8 @@ export interface PipelineDeps extends GateDeps {
   runId?: string;
   /** The org standards the agent was given, listed in the PR body. */
   standards?: PrStandards;
-  runAgent(spec: Spec): Promise<AgentRun>;
+  /** Runs the agent on the spec. `template` is the repo's PR template, whose sections the report fills. */
+  runAgent(spec: Spec, template?: PrTemplate): Promise<AgentRun>;
 }
 
 export type PipelineResult =
@@ -49,17 +51,23 @@ export async function runPipeline(deps: PipelineDeps): Promise<PipelineResult> {
   if (dirty.length) throw new Error(`Working tree is not clean:\n${dirty.map((f) => `  ${f}`).join("\n")}`);
   if (await git.branchExists(branch)) throw new Error(`Branch ${branch} already exists. Delete it or rename the spec.`);
 
+  // Read from the clean base checkout, and the agent can't write under .github/, so a PR is never
+  // held to a template it changed. A missing file is no template; any other read error aborts the
+  // run here, before any API spend.
+  const template = parsePrTemplate((await deps.readFile(PR_TEMPLATE_PATH)) ?? "");
+  log(template ? `PR template: ${template.sections.map((s) => s.heading).join(", ")}.` : `No PR template at ${PR_TEMPLATE_PATH}.`);
+
   await git.createBranch(branch);
   log(`Created ${branch}. Running the agent on ${spec.path}...`);
 
   // Commits, branch switches, hooks and config are invisible to git status, and agent-written tests could make them.
   const gitStateBefore = await git.fingerprint();
 
-  const run = await deps.runAgent(spec);
+  const run = await deps.runAgent(spec, template);
   log(`Agent finished in ${run.turns} turns, $${run.costUsd.toFixed(2)}.`);
 
   const files = await verifyChanges(deps, branch, gitStateBefore);
-  const body = prBody({ spec, run, files, model: deps.model, base, repoUrl: await git.repoUrl(), runId: deps.runId, standards: deps.standards });
+  const body = prBody({ spec, run, files, model: deps.model, base, repoUrl: await git.repoUrl(), runId: deps.runId, standards: deps.standards, template });
 
   await scanForSecrets(deps, branch, [["the PR body", body]], files);
   if (deps.dryRun) return { status: "dry-run", branch, files, body, run };

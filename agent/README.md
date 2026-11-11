@@ -39,12 +39,13 @@ Requires `git` and an authenticated [`gh`](https://cli.github.com/).
 
 ```
 spec.md ─▶ preflight ─▶ branch agent/<spec> ─▶ agent loop ─▶ npm run check ─▶ gates ─────────────▶ commit, push, gh pr create
-           clean tree,                         read, plan,    run again by     .git untouched,       PR body: summary, plan,
-           on base                             edit, test     the harness      scope, no secrets     testing, notes, cost
+           clean tree,                         read, plan,    run again by     .git untouched,       PR body: the repo's PR
+           on base, read                       edit, test     the harness      scope, no secrets     template, checks, plan,
+           PR template                                                                               notes, cost
 ```
 
-1. **Preflight.** It must start on the base branch with a clean tree, so the PR contains only the agent's work. The branch must not exist locally or on `origin`.
-2. **Agent loop.** Claude gets the spec, the repo's `CLAUDE.md` for conventions, and a fixed toolset. It plans, implements, writes tests and iterates until the checks pass. It returns a structured report (plan, summary, testing, notes) that becomes the PR description.
+1. **Preflight.** It must start on the base branch with a clean tree, so the PR contains only the agent's work. The branch must not exist locally or on `origin`. It then reads the repo's PR template (see [PR title and body](#pr-title-and-body)).
+2. **Agent loop.** Claude gets the spec, the PR template's sections, the repo's `CLAUDE.md` for conventions, and a fixed toolset. It plans, implements, writes tests and iterates until the checks pass. It returns a structured report (plan, summary, testing, notes, and the template's sections) that becomes the PR description.
 3. **Verification.** The harness doesn't take the agent's word for it:
    1. It runs `npm run check` itself. This is a fast local filter. Code that ran during the session could still tamper with gitignored files such as `node_modules`. The authoritative check is CI on the PR, which starts from a clean checkout and a fresh `npm ci`.
    2. It confirms that the branch, `HEAD`, git config and hooks are unchanged.
@@ -53,6 +54,19 @@ spec.md ─▶ preflight ─▶ branch agent/<spec> ─▶ agent loop ─▶ npm
 
    If any of these fails, nothing is committed and the branch is kept for inspection.
 4. **PR.** Commit, push and `gh pr create`. CI and the AI review run on it. A human approves and merges.
+
+## PR title and body
+
+Agent PRs follow the same PR template as human ones, so reviewers see every PR in the same shape.
+
+- **Title.** `SPEC-<number> <spec title>`, where the number is the spec file's leading digits, padded to three: `specs/001-rate-limiter.md` gives `SPEC-001 Add a token bucket rate limiter`. A spec file with no number gives the bare title. The commit subject is the same. The whole title, prefix included, is at most 72 characters (Unicode code points): a longer one is cut to 71, trailing whitespace is trimmed and `…` is appended. A test checks this against the example title in the template, so the two can't drift apart.
+- **Body, with a template.** The harness reads [`.github/pull_request_template.md`](../.github/pull_request_template.md) from the base checkout, before the agent starts. The agent can't write under `.github/`, so a PR is never held to a template it changed. Each `## ` section of the template, with its comment as guidance, goes into the prompt, and the agent fills one entry per section in its report. The body is the template's sections in order, then the sections the harness always adds: `## Checks` (the harness's own `npm run check` result), `## Plan`, `## Notes for the reviewer` (when there are notes), `## Standards` (with `--standards`) and `## Files changed`, then the run footer.
+  - A section the agent left out or left blank says so (`_The agent did not fill this section._`).
+  - Template sections with the name of a harness section (`Checks`, `Plan`, `Notes for the reviewer`, `Standards`, `Files changed`) are dropped, so the body never has two of them.
+  - In the agent's text, `#` and `##` headings become `###`, and a code block or HTML comment left open is closed, so one section can't swallow the next. This keeps the body tidy. It isn't a security boundary: the CI status on the PR, not its body, is the evidence the checks passed.
+- **Body, without a template.** If the file is missing, or has no usable `## ` section, the body has `## Summary`, `## Plan` and `## Testing` from the report, then the same harness sections. Any other error reading the file (a directory at that path, no permission) stops the run before the agent starts, so no API spend goes on a broken setup.
+
+Only `.github/pull_request_template.md` is read. GitHub's other template locations, and multiple templates, are not supported.
 
 ## Org standards
 
@@ -240,6 +254,7 @@ Tests cover:
 - the permission policy;
 - the secret handling;
 - the pipeline gates;
+- the PR title and body: the `SPEC-XXX` title and its cut, the template parser, the prompt it produces and the body built from it;
 - the org standards: loading from fixtures, the system prompt they produce, and the PR body section;
 - the fix cycle: findings parsing, the cycle limit and progress rules, and its gates;
 - the audit log: redaction, run ids and trailers, and failure categories checked against the errors the real gates throw.

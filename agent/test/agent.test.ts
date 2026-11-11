@@ -15,6 +15,7 @@ import type { Exec } from "../src/exec.js";
 import type { RunEvent } from "../src/runlog.js";
 import { standardsPrompt } from "../src/standards.js";
 import { parseSpec } from "../src/spec.js";
+import { prTemplatePrompt, type PrTemplate } from "../src/template.js";
 
 const spec = parseSpec("specs/002-x.md", "# X\n\n## Goal\ng\n\n## Requirements\nr\n\n## Acceptance criteria\n- AC1: a\n");
 
@@ -34,6 +35,15 @@ describe("buildPrompt", () => {
     expect(buildPrompt("<spec>{{specBody}}</spec>", tricky, ["demo-app"])).toBe(
       "<spec>use {{writableDirs}} and $& literally</spec>",
     );
+  });
+
+  it("AC3: puts the PR template text before the <spec> block, and no <pr_template> without one", async () => {
+    const template: PrTemplate = { sections: [{ heading: "What", guidance: "The change." }] };
+    const withTemplate = buildPrompt(await loadPromptTemplate(), spec, ["demo-app"], template);
+    expect(withTemplate).toContain(prTemplatePrompt(template));
+    expect(withTemplate.indexOf(prTemplatePrompt(template))).toBeLessThan(withTemplate.indexOf("<spec path="));
+    expect(withTemplate.indexOf(prTemplatePrompt(template))).toBeGreaterThan(withTemplate.indexOf("Rules:"));
+    expect(buildPrompt(await loadPromptTemplate(), spec, ["demo-app"])).not.toContain("<pr_template>");
   });
 
   it("rejects unknown placeholders in the template", () => {
@@ -70,7 +80,21 @@ describe("describeMessage", () => {
 describe("AGENT_REPORT_JSON_SCHEMA", () => {
   it("is draft-07, which the Claude Code CLI accepts, and requires every report field", () => {
     expect(AGENT_REPORT_JSON_SCHEMA.$schema).toBe("http://json-schema.org/draft-07/schema#");
-    expect(AGENT_REPORT_JSON_SCHEMA.required).toEqual(["plan", "summary", "testing", "checksPassed", "notes"]);
+    expect(AGENT_REPORT_JSON_SCHEMA.required).toEqual(["plan", "summary", "testing", "checksPassed", "notes", "sections"]);
+  });
+});
+
+describe("AgentReportSchema", () => {
+  const report = { plan: ["p"], summary: "s", testing: "t", checksPassed: true, notes: "" };
+
+  it("AC4: rejects a report with no sections and accepts an empty array", () => {
+    expect(AgentReportSchema.safeParse(report).success).toBe(false);
+    expect(AgentReportSchema.safeParse({ ...report, sections: [] }).success).toBe(true);
+    expect(AgentReportSchema.safeParse({ ...report, sections: [{ heading: "What", text: "x" }] }).success).toBe(true);
+  });
+
+  it("AC4: lists sections as required in the JSON schema", () => {
+    expect(AGENT_REPORT_JSON_SCHEMA.required).toContain("sections");
   });
 });
 
