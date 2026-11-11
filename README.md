@@ -13,6 +13,8 @@ flowchart LR
   review -- "only low findings, or none" --> human["Human approves<br/>and merges"]
   standards[("Org standards<br/>(versioned)")] -.-> agent
   standards -.-> review
+  classDef optional stroke-dasharray: 5 5
+  class specReview optional
 ```
 
 AI coding agents are fast, but unattended they are hard to trust. This repo shows one way to make them trustworthy: the agent works from a written spec, guardrails enforced in code and checked in CI limit what it can do, a second model reviews every change, and a person still approves every merge.
