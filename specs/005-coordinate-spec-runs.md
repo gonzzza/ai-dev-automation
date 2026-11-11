@@ -32,6 +32,7 @@ Today a person picks each spec and starts the agent on it by hand, one at a time
     | { status: "in-progress"; pr?: number; branch?: string; run?: true }
     | { status: "needs-human"; reason: "closed" | "reverted"; pr: number }
     | { status: "needs-human"; reason: "failed"; conclusion: string }
+    | { status: "needs-human"; reason: "no-pr" }
     | { status: "blocked"; waitingOn: number[] }
     | { status: "ready" };
   export interface PlannedSpec { number: number; path: string; slug: string; state: SpecState }
@@ -45,10 +46,17 @@ Today a person picks each spec and starts the agent on it by hand, one at a time
   2. A merged PR of the spec exists. If a merged revert PR has a later `mergedAt` than the latest merged PR, the state is `needs-human` / `reverted` with the revert PR's number. Otherwise it is `done` with the latest merged PR's number.
   3. An in-flight run of the spec: `in-progress` with `run: true`.
   4. A closed, unmerged PR of the spec: `needs-human` / `closed` with the highest such PR number. This comes before the branch rule, because GitHub keeps a branch when its PR is closed without merging.
-  5. `agent/<slug>` or `spec/<slug>` is among `branches`: `in-progress` with that branch. The branch is the claim: the agent already refuses to start when its branch exists.
-  6. The spec's most recent completed run (by `createdAt`) has a `conclusion` other than `success`: `needs-human` / `failed` with that conclusion. A run that fails before pushing leaves no branch and no PR, so without this rule the spec would look `ready` and be dispatched again.
+  5. The spec has a completed run. Its most recent one (by `createdAt`) decides:
+     - A `conclusion` other than `success` gives `needs-human` / `failed` with that conclusion. A run that fails before pushing leaves no branch and no PR, so without this rule the spec would look `ready` and be dispatched again. This comes before the branch rule because a run can push its branch and then fail before opening the PR.
+     - `success` gives `needs-human` / `no-pr`. A run that succeeds always opens a `SPEC-` PR, and rules 1, 2 and 4 already cover every such PR. Reaching this rule means that PR was retitled or deleted, and without the rule the spec would be dispatched again every wave.
+  6. `agent/<slug>` or `spec/<slug>` is among `branches`: `in-progress` with that branch. The branch is the claim: the agent already refuses to start when its branch exists.
   7. Every dependency is `done`: `ready`. Otherwise `blocked`, with the dependencies that aren't `done` in ascending order.
-- The coordinator never retries on its own. Fixing the cause of a failure doesn't change a spec's state by itself. A person re-arms a `needs-human` spec by fixing the cause, then running *Implement a spec* by hand: that run moves the spec to `in-progress`, and the PR it opens takes over from there.
+- The coordinator never retries on its own. Fixing the cause of a failure doesn't change a spec's state by itself. To re-arm a `needs-human` spec, a person:
+  1. fixes the cause;
+  2. deletes the spec's `agent/<slug>` branch on `origin` if it still exists, since the agent refuses to start on an existing branch and GitHub keeps the branch of a PR closed without merging;
+  3. runs *Implement a spec* by hand.
+
+  While that run is in flight, a `closed`, `failed` or `no-pr` spec shows `in-progress` (rule 3). A `reverted` spec stays `needs-human` until the new PR opens, because the merged-PR rule comes first. It becomes `done` when that PR merges.
 - The run history the coordinator reads is the last 200 runs. A failure older than that is no longer seen, so a spec can get at most one more automatic attempt after its failure falls out of that window.
 
 ### Reading GitHub and dispatching
@@ -58,7 +66,7 @@ Today a person picks each spec and starts the agent on it by hand, one at a time
   - `gh run list --workflow implement-spec.yml --limit 200 --json databaseId,displayTitle,status,conclusion,createdAt`, read into `RunSummary` with `id` from `databaseId` and `title` from `displayTitle`.
 
   Any of them exiting non-zero throws, with the command's output, before anything is dispatched.
-- It logs one line per spec, in number order: the number, the status and the detail (`done (#33)`, `in-progress (agent/001-rate-limiter)`, `in-progress (run)`, `blocked: waiting on 005`, `needs-human: reverted (#41)`, `needs-human: failed (failure)`).
+- It logs one line per spec, in number order: the number, the status and the detail (`done (#33)`, `in-progress (agent/001-rate-limiter)`, `in-progress (run)`, `blocked: waiting on 005`, `needs-human: reverted (#41)`, `needs-human: failed (failure)`, `needs-human: no-pr`).
 - With `dispatch: false` (the default), it dispatches nothing.
 - With `dispatch: true`, it first checks the local checkout. It runs `git fetch origin main`, then throws, naming the problem, unless `git rev-parse HEAD` equals `git rev-parse origin/main` and nothing under `specs/` has uncommitted changes. The workflow implements the spec as it is on `main`, so the local plan must match it, and the fetch keeps a stale `origin/main` from passing the check.
 - With `dispatch: true` and any run of `implement-spec.yml` in flight, including dry runs and untitled ones, it dispatches nothing and logs how many runs it is waiting on. Dispatching one wave at a time keeps the spend of a wave bounded and the plan simple.
@@ -85,8 +93,9 @@ Today a person picks each spec and starts the agent on it by hand, one at a time
   - a revert merged before the latest merge still gives `done`;
   - an in-flight `Implement <spec path>` run gives `in-progress` with `run: true`, even with a closed PR;
   - a closed, unmerged PR gives `needs-human` / `closed`, even when its `agent/<slug>` branch still exists;
-  - an `agent/<slug>` or `spec/<slug>` branch without a PR gives `in-progress`;
-  - with no PR, branch or in-flight run, a most recent completed run concluded `failure` or `cancelled` gives `needs-human` / `failed`, and one concluded `success` doesn't;
+  - with no PR and no in-flight run, a most recent completed run concluded `failure` or `cancelled` gives `needs-human` / `failed`, even when the spec's `agent/<slug>` branch exists;
+  - with no PR and no in-flight run, a most recent completed run concluded `success` gives `needs-human` / `no-pr`, and an older failed run doesn't change that;
+  - an `agent/<slug>` or `spec/<slug>` branch with no PR and no completed run gives `in-progress`;
   - dry-run runs and runs titled `Implement a spec` affect no spec.
 
   `SPEC-004` and `SPEC-4` both match spec 4, and `SPEC-0040` and `XSPEC-004` don't.
@@ -99,7 +108,7 @@ Today a person picks each spec and starts the agent on it by hand, one at a time
   - when the second of three dispatches fails, it throws with the first spec's path in the message and doesn't attempt the third;
   - it returns once every dispatched spec has a run with a new `id`, re-listing runs through the fake `sleep`. A new run that is already `completed` with `failure` counts, and a run whose `id` was listed before dispatching doesn't. It throws naming the missing specs when no new run has appeared after 60 seconds of fake time.
 - AC7: With an in-memory `RunLog`, `runCoordinator` logs one `plan.result` event and one `dispatch` event per dispatched spec, and the per-spec lines it passes to `log` match the formats above.
-- AC8: `spec-coding-agent/README.md` documents the `--plan` mode, its options and the rules for each state, including that reverts, closed PRs and failed runs go to a human and are never retried, and that two passes started at the same moment can both dispatch. `specs/README.md` shows the optional `depends_on` frontmatter in the template and its rules. Tests use fakes only: no network, no `gh`, no git remote.
+- AC8: `spec-coding-agent/README.md` documents the `--plan` mode, its options and the rules for each state, including that reverts, closed PRs, failed runs and runs without a PR go to a human and are never retried, the three re-arm steps (deleting a leftover `agent/<slug>` branch included), and that two passes started at the same moment can both dispatch. `specs/README.md` shows the optional `depends_on` frontmatter in the template and its rules. Tests use fakes only: no network, no `gh`, no git remote.
 
 ## Out of scope
 - Running agents locally in parallel, one git worktree per spec. That is spec 006, which reuses `planSpecs`.
