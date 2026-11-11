@@ -1,4 +1,4 @@
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { AgentRun } from "../src/agent.js";
 import { commitMessage, prBody, prTitle, UNFILLED_SECTION, type PrContext } from "../src/pr.js";
@@ -61,6 +61,23 @@ describe("prBody standards section", () => {
     expect(body).toContain("## Notes for the reviewer\n\nAssumed UTC.\n\n## Standards\n\n- Given to the agent: `TS-003`\n\n## Files changed");
     expect(body).not.toContain("Version:");
     expect(body).not.toContain("Not given to the agent");
+  });
+});
+
+describe("prBody opening line", () => {
+  it("links the agent's workspace folder and the spec file on the base branch", () => {
+    const body = prBody({ ...context, repoUrl: "https://github.com/o/r" });
+    expect(body.split("\n\n")[0]).toBe(
+      "> 🤖 Opened by the [spec-driven agent](https://github.com/o/r/tree/main/spec-coding-agent) " +
+        "from [`specs/001-rate-limiter.md`](https://github.com/o/r/blob/main/specs/001-rate-limiter.md). A human reviews and merges.",
+    );
+  });
+
+  it("links a folder that exists in this repo, so a rename can't leave the link dangling", () => {
+    const body = prBody({ ...context, repoUrl: "https://github.com/o/r" });
+    const folder = /\/tree\/main\/([^)]+)\)/.exec(body)?.[1];
+    expect(folder).toBeDefined();
+    expect(existsSync(new URL(`../../${folder}/package.json`, import.meta.url))).toBe(true);
   });
 });
 
