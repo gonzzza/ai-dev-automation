@@ -142,21 +142,24 @@ You do the agent's job and the harness's job, under the same rules.
 
 **Confirm, then publish.** Show the user the summary, the plan, the files changed (`git diff --stat`) and any notes, and offer to show the full diff. Commit, push and open the PR only after a clear yes:
 
-- **Commit:** the spec's title as the subject. The body says `Implements specs/<file>.md in a Claude Code session.`, then the summary, then the attribution trailer this session uses.
-- **PR:** `gh pr create --base <base> --head spec/<name>`, with the spec's title as the PR title. Use the agent's body layout (`prBody` in `agent/src/pr.ts`) so reviewers see the same sections:
+Title and body follow the repo's PR template, `.github/pull_request_template.md` on the base, the same way the agent's PRs do (spec 004, `prTitle` and `prBody` in `agent/src/pr.ts`). Read the template before writing either.
+
+- **Title:** the rule in the template's opening comment. In this repo: `SPEC-<number> <spec title>`, where the number is the spec file's leading digits padded to three (`specs/004-x.md` gives `SPEC-004`), at most 72 characters including the ID. A longer one is cut to 71, trailing whitespace trimmed, and `…` appended.
+- **Commit:** the PR title as the subject. The body says `Implements specs/<file>.md in a Claude Code session.`, then the summary, then the attribution trailer this session uses.
+- **PR:** `gh pr create --base <base> --head spec/<name> --title <title>`. The body is the template's `## ` sections in its order, each filled as its comment asks, then the sections the agent's harness always adds, so reviewers see the same shape whoever opened the PR:
 
   ```markdown
   > Implemented in a Claude Code session from `specs/<file>.md`. A human reviews and merges.
 
-  ## Summary
+  ## <each template section, in order>   (in this repo: What, Why, Testing. Why links the spec; Testing lists what the tests cover, by AC ID)
+  ## Checks          (`npm run check` (lint, typecheck, all tests) passed locally. CI verifies again on a clean checkout.)
   ## Plan            (numbered steps)
-  ## Testing         (what the tests cover, by AC ID; then: `npm run check` passed locally. CI verifies again on a clean checkout.)
   ## Notes for the reviewer   (only if there are any)
   ## Standards       (only with standards: the ids applied, and the base SHA)
   ## Files changed   (one `- \`path\`` per file)
   ```
 
-  End the body with the PR attribution line this session uses.
+  Skip a template section named like one of the harness sections (`Checks`, `Plan`, `Notes for the reviewer`, `Standards`, `Files changed`). Without a template, use `## Summary`, `## Plan` and `## Testing` (ending with the checks line) in place of the template sections and `## Checks`. Links in the body must be full URLs (`https://github.com/<owner>/<repo>/blob/<base>/<path>`): relative links don't resolve in a PR description. End the body with the PR attribution line this session uses.
 
 ## 5. Report
 

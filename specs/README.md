@@ -15,7 +15,7 @@ The file name becomes the branch name, so use lowercase kebab-case with a number
 ## Template
 
 ```markdown
-# <Title: becomes the PR title>
+# <Title: at most 63 characters, becomes the PR title after the SPEC-XXX prefix>
 
 ## Goal
 Why this change exists and who it is for. Two or three sentences.
