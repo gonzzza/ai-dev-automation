@@ -25,7 +25,7 @@ Today a person picks each spec and starts the agent on it by hand, one at a time
 
   ```ts
   export interface PullSummary { number: number; title: string; state: "OPEN" | "CLOSED" | "MERGED"; mergedAt: string | null }
-  export interface RunSummary { title: string; status: string; conclusion: string | null; createdAt: string }
+  export interface RunSummary { id: number; title: string; status: string; conclusion: string | null; createdAt: string }
   export interface GithubState { pulls: readonly PullSummary[]; branches: readonly string[]; runs: readonly RunSummary[] }
   export type SpecState =
     | { status: "done"; pr: number }
@@ -48,14 +48,14 @@ Today a person picks each spec and starts the agent on it by hand, one at a time
   5. `agent/<slug>` or `spec/<slug>` is among `branches`: `in-progress` with that branch. The branch is the claim: the agent already refuses to start when its branch exists.
   6. The spec's most recent completed run (by `createdAt`) has a `conclusion` other than `success`: `needs-human` / `failed` with that conclusion. A run that fails before pushing leaves no branch and no PR, so without this rule the spec would look `ready` and be dispatched again.
   7. Every dependency is `done`: `ready`. Otherwise `blocked`, with the dependencies that aren't `done` in ascending order.
-- The coordinator never retries on its own. A person re-arms a `needs-human` spec by running *Implement a spec* by hand, or by fixing what made it fail.
+- The coordinator never retries on its own. Fixing the cause of a failure doesn't change a spec's state by itself. A person re-arms a `needs-human` spec by fixing the cause, then running *Implement a spec* by hand: that run moves the spec to `in-progress`, and the PR it opens takes over from there.
 - The run history the coordinator reads is the last 200 runs. A failure older than that is no longer seen, so a spec can get at most one more automatic attempt after its failure falls out of that window.
 
 ### Reading GitHub and dispatching
 - `runCoordinator(deps)` takes the parsed specs, an injected `Exec`, the repo root, `dispatch: boolean`, `maxParallel: number`, a `log(line)` function, an injected `sleep(ms): Promise<void>` and an optional `RunLog`. It returns `{ plan: PlannedSpec[]; dispatched: string[]; inFlightRuns: number }`. It reads GitHub with exactly these commands, run in the repo root:
   - `gh api --paginate "repos/{owner}/{repo}/pulls?state=all&base=main&per_page=100" --jq ".[] | {number, title, state, merged_at}"`: one JSON object per line, for every PR against `main`. A PR is `MERGED` when `merged_at` is set, `OPEN` when `state` is `open`, and `CLOSED` otherwise. Matching is done on the titles in code, so there is no search tokenizing and no result cap. It costs one request per 100 PRs.
   - `git ls-remote --heads origin refs/heads/agent/* refs/heads/spec/*`.
-  - `gh run list --workflow implement-spec.yml --limit 200 --json displayTitle,status,conclusion,createdAt`, read into `RunSummary` with `title` from `displayTitle`.
+  - `gh run list --workflow implement-spec.yml --limit 200 --json databaseId,displayTitle,status,conclusion,createdAt`, read into `RunSummary` with `id` from `databaseId` and `title` from `displayTitle`.
 
   Any of them exiting non-zero throws, with the command's output, before anything is dispatched.
 - It logs one line per spec, in number order: the number, the status and the detail (`done (#33)`, `in-progress (agent/001-rate-limiter)`, `in-progress (run)`, `blocked: waiting on 005`, `needs-human: reverted (#41)`, `needs-human: failed (failure)`).
@@ -63,7 +63,7 @@ Today a person picks each spec and starts the agent on it by hand, one at a time
 - With `dispatch: true`, it first checks the local checkout. It runs `git fetch origin main`, then throws, naming the problem, unless `git rev-parse HEAD` equals `git rev-parse origin/main` and nothing under `specs/` has uncommitted changes. The workflow implements the spec as it is on `main`, so the local plan must match it, and the fetch keeps a stale `origin/main` from passing the check.
 - With `dispatch: true` and any run of `implement-spec.yml` in flight, including dry runs and untitled ones, it dispatches nothing and logs how many runs it is waiting on. Dispatching one wave at a time keeps the spend of a wave bounded and the plan simple.
 - Otherwise it dispatches up to `maxParallel` `ready` specs, lowest number first, each with `gh workflow run implement-spec.yml --ref main -f spec=<repo-relative spec path>`. A failed dispatch throws and stops the rest. The ones already dispatched are in the error message.
-- `gh workflow run` returns before GitHub lists the new run. So after dispatching, it re-runs the `gh run list` command every 5 seconds, through `sleep`, until each dispatched spec has an in-flight run titled `Implement <spec path>`. If after 60 seconds any spec still has none, it throws naming those specs. A pass started after `runCoordinator` returns therefore sees the wave as in flight. Two passes started at the same moment can still both dispatch. The workflow that will run the coordinator (out of scope) prevents that with a single `concurrency` group.
+- `gh workflow run` returns before GitHub lists the new run. So after dispatching, it re-runs the `gh run list` command every 5 seconds, through `sleep`, until each dispatched spec has a run titled `Implement <spec path>` whose `id` wasn't in the list read before dispatching. That run counts whether it is in flight or already completed, since a run that fails in its first step can finish between two checks. Comparing ids, not `createdAt`, keeps a skewed local clock out of it. If after 60 seconds any spec still has no new run, it throws naming those specs. A pass started after `runCoordinator` returns therefore sees each dispatched spec's run, in flight or finished. Two passes started at the same moment can still both dispatch. The workflow that will run the coordinator (out of scope) prevents that with a single `concurrency` group.
 - With a `RunLog`, it logs one `plan.result` event with the plan, and one `dispatch` event per dispatched spec path.
 
 ### CLI
@@ -97,7 +97,7 @@ Today a person picks each spec and starts the agent on it by hand, one at a time
   - it dispatches nothing while any `implement-spec.yml` run is in flight;
   - it runs `git fetch origin main` before comparing, and throws before dispatching when `HEAD` isn't `origin/main` or a file under `specs/` has uncommitted changes;
   - when the second of three dispatches fails, it throws with the first spec's path in the message and doesn't attempt the third;
-  - it returns once every dispatched spec has an in-flight run, re-listing runs through the fake `sleep`, and throws naming the missing specs when a run hasn't appeared after 60 seconds of fake time.
+  - it returns once every dispatched spec has a run with a new `id`, re-listing runs through the fake `sleep`. A new run that is already `completed` with `failure` counts, and a run whose `id` was listed before dispatching doesn't. It throws naming the missing specs when no new run has appeared after 60 seconds of fake time.
 - AC7: With an in-memory `RunLog`, `runCoordinator` logs one `plan.result` event and one `dispatch` event per dispatched spec, and the per-spec lines it passes to `log` match the formats above.
 - AC8: `spec-coding-agent/README.md` documents the `--plan` mode, its options and the rules for each state, including that reverts, closed PRs and failed runs go to a human and are never retried, and that two passes started at the same moment can both dispatch. `specs/README.md` shows the optional `depends_on` frontmatter in the template and its rules. Tests use fakes only: no network, no `gh`, no git remote.
 
