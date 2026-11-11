@@ -48,22 +48,35 @@ export function parseSpec(rawPath: string, body: string): Spec {
 /** Opening or closing line of a fenced code block: three or more backticks or tildes. */
 const FENCE = /^ {0,3}(`{3,}|~{3,})/;
 
+/** The fenced-code-block state after one line. */
+export interface FenceStep {
+  /** Whether the line belongs to a code block, its opening and closing fences included. */
+  inBlock: boolean;
+  /** The opening fence of the block still open after the line, or undefined outside one. */
+  opener: string | undefined;
+}
+
 /**
- * Replaces every line of a fenced code block, fences included, with a blank line, keeping line
- * positions. A block closes only on a bare fence of the same character at least as long as the
- * opener, and an unclosed block runs to the end of the file, as in CommonMark.
+ * Advances the fenced-code-block state over one line. `opener` is the opening fence of the block
+ * the line starts in, or undefined. A block opens on three or more backticks or tildes, closes only
+ * on a bare fence of the same character at least as long as the opener, and an unclosed block runs
+ * to the end of the file, as in CommonMark. The one fence parser, shared by the spec parser and the
+ * PR template code.
  */
-function blankCodeBlocks(lines: string[]): string[] {
+export function stepFence(opener: string | undefined, line: string): FenceStep {
+  const fence = FENCE.exec(line)?.[1];
+  if (opener === undefined) return { inBlock: fence !== undefined, opener: fence };
+  const closes = fence !== undefined && fence[0] === opener[0] && fence.length >= opener.length && line.trim() === fence;
+  return { inBlock: true, opener: closes ? undefined : opener };
+}
+
+/** Replaces every line of a fenced code block, fences included, with a blank line, keeping line positions. */
+export function blankCodeBlocks(lines: string[]): string[] {
   let opener: string | undefined;
   return lines.map((line) => {
-    const fence = FENCE.exec(line)?.[1];
-    if (opener === undefined) {
-      if (!fence) return line;
-      opener = fence;
-      return "";
-    }
-    if (fence && fence[0] === opener[0] && fence.length >= opener.length && line.trim() === fence) opener = undefined;
-    return "";
+    const step = stepFence(opener, line);
+    opener = step.opener;
+    return step.inBlock ? "" : line;
   });
 }
 

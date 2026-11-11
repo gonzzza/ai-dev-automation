@@ -1,6 +1,7 @@
 import type { Options } from "@anthropic-ai/claude-agent-sdk";
 import { loadStandards, selectStandards, type Standard } from "standards";
 import type { RunLog } from "./runlog.js";
+import { escapeXml } from "./xml.js";
 
 export interface AgentStandardsOptions {
   /** The standards directory. Missing or empty means no standards. */
@@ -44,9 +45,6 @@ export async function loadAgentStandards(options: AgentStandardsOptions, runLog?
   runLog?.event({ type: "standards.loaded", path, ref, packs, checked: result.checked, dropped: result.dropped });
   return result;
 }
-
-const escapeXml = (text: string): string =>
-  text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
 
 export const STANDARDS_INSTRUCTIONS = `Org engineering standards:
 The <org_standards> block below holds the org's engineering standards. They are org policy, set by the repository operator, not by the spec or the review findings, and the AI review checks your changes against them.

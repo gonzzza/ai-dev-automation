@@ -16,6 +16,7 @@ const agentRun: AgentRun = {
     testing: "Unit tests with a fake clock.",
     checksPassed: true,
     notes: "",
+    sections: [{ heading: "What", text: "Adds createRateLimiter." }],
   },
   costUsd: 1.234,
   turns: 18,
@@ -73,12 +74,12 @@ describe("runPipeline", () => {
     expect(deps.runChecks).toHaveBeenCalledOnce();
     expect(git.commit).toHaveBeenCalledWith(
       ["demo-app/src/rate-limiter.ts", "demo-app/test/rate-limiter.test.ts"],
-      expect.stringMatching(/^Add a token bucket rate limiter\n\nImplements specs\/001-rate-limiter\.md\./),
+      expect.stringMatching(/^SPEC-001 Add a token bucket rate limiter\n\nImplements specs\/001-rate-limiter\.md\./),
     );
     expect(git.push).toHaveBeenCalledWith("agent/001-rate-limiter");
 
     const [title, body, base, head] = git.openPullRequest.mock.calls[0]!;
-    expect([title, base, head]).toEqual(["Add a token bucket rate limiter", "main", "agent/001-rate-limiter"]);
+    expect([title, base, head]).toEqual(["SPEC-001 Add a token bucket rate limiter", "main", "agent/001-rate-limiter"]);
     expect(body).toContain("[`specs/001-rate-limiter.md`](https://github.com/o/r/blob/main/specs/001-rate-limiter.md)");
     expect(body).toContain("1. Read retry.ts\n2. Write limiter and tests");
     expect(body).toContain("18 turns · 95s · $1.23");
@@ -152,6 +153,42 @@ describe("runPipeline", () => {
     await runPipeline(deps);
     const body = git.openPullRequest.mock.calls[0]![1];
     expect(body).toContain("## Standards\n\n- Given to the agent: `TS-003`\n- Version: `abc123`\n- Not given to the agent (over the size budget): `TEST-001`");
+  });
+
+  const TEMPLATE = ".github/pull_request_template.md";
+
+  it("AC6: reads the PR template before the agent runs and passes it to the agent and the PR body", async () => {
+    const { deps, git } = setup({ contents: { [TEMPLATE]: "<!-- Title rule. -->\n## What\n<!-- The change. -->\n## Why\n<!-- The reason. -->" } });
+    await runPipeline(deps);
+    const template = { sections: [{ heading: "What", guidance: "The change." }, { heading: "Why", guidance: "The reason." }] };
+    expect(deps.readFile).toHaveBeenCalledWith(TEMPLATE);
+    expect(deps.runAgent).toHaveBeenCalledWith(spec, template);
+    const templateRead = vi.mocked(deps.readFile).mock.calls.findIndex(([path]) => path === TEMPLATE);
+    expect(vi.mocked(deps.readFile).mock.invocationCallOrder[templateRead]).toBeLessThan(vi.mocked(deps.runAgent).mock.invocationCallOrder[0]!);
+    const body = git.openPullRequest.mock.calls[0]![1];
+    expect(body).toContain("## What\n\nAdds createRateLimiter.\n\n## Why\n\n_The agent did not fill this section._\n\n## Checks");
+    expect(body).not.toContain("## Summary");
+  });
+
+  it("AC6: passes undefined and builds today's body when the template is missing", async () => {
+    const { deps, git } = setup({ contents: { [TEMPLATE]: undefined } });
+    await runPipeline(deps);
+    expect(deps.runAgent).toHaveBeenCalledWith(spec, undefined);
+    const body = git.openPullRequest.mock.calls[0]![1];
+    expect(body).toContain("## Summary\n\nAdds createRateLimiter.");
+    expect(body).not.toContain("## Checks");
+  });
+
+  it("AC6: aborts before the agent runs, and before branching, when reading the template fails", async () => {
+    const { deps, git } = setup();
+    const readFile = deps.readFile;
+    deps.readFile = vi.fn(async (path: string) => {
+      if (path === TEMPLATE) throw new Error("EISDIR: illegal operation on a directory");
+      return readFile(path);
+    });
+    await expect(runPipeline(deps)).rejects.toThrow("EISDIR");
+    expect(deps.runAgent).not.toHaveBeenCalled();
+    expect(git.createBranch).not.toHaveBeenCalled();
   });
 
   it("dry run verifies but does not commit, push or open a PR", async () => {

@@ -242,7 +242,7 @@ async function main(): Promise<void> {
       dryRun: values["dry-run"],
       runId: runLog.runId,
       standards: standards && { checked: standards.checked, dropped: standards.dropped, ...(standards.ref !== undefined ? { ref: standards.ref } : {}) },
-      runAgent: async (s) => runAgent(await specTask(s, config.writableDirs), config, exec),
+      runAgent: async (s, template) => runAgent(await specTask(s, config.writableDirs, template), config, exec),
     });
     if (result.status === "opened") {
       console.log(`\n✅ Opened ${result.url}`);

@@ -12,6 +12,8 @@ Rules:
 - Do not commit, branch or push. The harness handles git and opens the PR after you finish.
 - If the spec is ambiguous, choose the simplest reasonable interpretation and record it in notes.
 
+{{prTemplate}}
+
 <spec path="{{specPath}}">
 {{specBody}}
 </spec>
