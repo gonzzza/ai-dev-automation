@@ -190,6 +190,12 @@ describe("depends_on frontmatter", () => {
 describe("checkSpecs dependencies", () => {
   const spec = (path: string, deps?: string) => ({ path, body: deps === undefined ? VALID : `---\ndepends_on: [${deps}]\n---\n${VALID}` });
 
+  it("reports differently padded numbers as duplicates, since both are the same spec number", () => {
+    expect(checkSpecs([spec("specs/001-a.md"), spec("specs/01-b.md"), spec("specs/002-c.md", "1")])).toEqual([
+      "specs/01-b.md: number 01 is already used by specs/001-a.md",
+    ]);
+  });
+
   it("AC2: accepts a valid dependency graph", () => {
     expect(checkSpecs([spec("specs/001-a.md"), spec("specs/002-b.md", "1"), spec("specs/003-c.md", "1, 2")])).toEqual([]);
   });

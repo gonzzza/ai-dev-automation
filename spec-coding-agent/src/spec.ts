@@ -189,7 +189,8 @@ function parseCriteria(path: string, lines: string[]): Criterion[] {
  */
 export function checkSpecs(files: { path: string; body: string }[]): string[] {
   const errors: string[] = [];
-  const byNumber = new Map<string, string>();
+  // Keyed by value, not digits, so "01-" and "001-" count as the same number, as they do in the
+  // dependency graph and in the coordinator.
   const graph = new Map<number, Spec>();
   for (const file of files) {
     try {
@@ -200,10 +201,9 @@ export function checkSpecs(files: { path: string; body: string }[]): string[] {
         errors.push(`${path}: file name must start with a number, e.g. 002-add-cache.md`);
         continue;
       }
-      const other = byNumber.get(number);
-      if (other) errors.push(`${path}: number ${number} is already used by ${other}`);
-      else byNumber.set(number, path);
-      if (!graph.has(Number(number))) graph.set(Number(number), spec);
+      const other = graph.get(Number(number));
+      if (other) errors.push(`${path}: number ${number} is already used by ${other.path}`);
+      else graph.set(Number(number), spec);
     } catch (error) {
       errors.push(error instanceof Error ? error.message : String(error));
     }
