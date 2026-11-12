@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { checkSpecs, parseSpec } from "../src/spec.js";
+import { fileURLToPath } from "node:url";
+import { checkSpecs, parseSpec, readSpecFiles } from "../src/spec.js";
 
 const VALID = `# Add a rate limiter
 
@@ -138,5 +139,81 @@ describe("checkSpecs", () => {
       "specs/add-cache.md: file name must start with a number, e.g. 002-add-cache.md",
       expect.stringMatching(/^specs\/003-c\.md: .*# Title/),
     ]);
+  });
+});
+
+describe("depends_on frontmatter", () => {
+  const withFrontmatter = (lines: string) => `---\n${lines}\n---\n${VALID}`;
+
+  it("AC1: gives [] without frontmatter and for depends_on: []", () => {
+    expect(parseSpec("specs/001-a.md", VALID).dependsOn).toEqual([]);
+    expect(parseSpec("specs/001-a.md", withFrontmatter("depends_on: []")).dependsOn).toEqual([]);
+  });
+
+  it("AC1: reads numbers in order, leading zeros allowed", () => {
+    expect(parseSpec("specs/004-a.md", withFrontmatter("depends_on: [001, 3]")).dependsOn).toEqual([1, 3]);
+    expect(parseSpec("specs/004-a.md", withFrontmatter("depends_on: [3, 1]")).dependsOn).toEqual([3, 1]);
+  });
+
+  it("AC1: parses the title, sections and criteria the same with a frontmatter block, and keeps it in body", () => {
+    const body = withFrontmatter("depends_on: [1]");
+    const { dependsOn: _a, body: plainBody, ...plain } = parseSpec("specs/002-a.md", VALID);
+    const { dependsOn, body: fmBody, ...withBlock } = parseSpec("specs/002-a.md", body);
+    expect(withBlock).toEqual(plain);
+    expect(dependsOn).toEqual([1]);
+    expect(plainBody).toBe(VALID);
+    expect(fmBody).toBe(body);
+  });
+
+  it("AC1: doesn't read a heading inside the frontmatter as the title", () => {
+    const body = `---\ndepends_on: [1]\n---\n${VALID}`.replace("depends_on: [1]", "depends_on: [1]\n# not the title");
+    expect(() => parseSpec("specs/002-a.md", body)).toThrow(/specs\/002-a\.md:3: expected "key: value"/);
+  });
+
+  it.each([
+    ["an unclosed block", `---\ndepends_on: [1]\n${VALID}`, /not closed/],
+    ["an unknown key", withFrontmatter("needs: [1]"), /unknown frontmatter key "needs"/],
+    ["a duplicate key", withFrontmatter("depends_on: [1]\ndepends_on: [2]"), /duplicate frontmatter key "depends_on"/],
+    ["a block list", withFrontmatter("depends_on:\n  - 1"), /block lists are not supported/],
+    ["0", withFrontmatter("depends_on: [0]"), /positive integers, got "0"/],
+    ["-1", withFrontmatter("depends_on: [-1]"), /positive integers, got "-1"/],
+    ["1.5", withFrontmatter("depends_on: [1.5]"), /positive integers, got "1.5"/],
+    ["abc", withFrontmatter("depends_on: [abc]"), /positive integers, got "abc"/],
+    ["a number listed twice", withFrontmatter("depends_on: [1, 001]"), /lists 1 twice/],
+    ["a value that isn't an inline list", withFrontmatter("depends_on: 1"), /inline list/],
+  ])("AC1: throws naming the path for %s", (_name, body, message) => {
+    expect(() => parseSpec("specs/009-x.md", body)).toThrow(message);
+    expect(() => parseSpec("specs/009-x.md", body)).toThrow(/^specs\/009-x\.md/);
+  });
+});
+
+describe("checkSpecs dependencies", () => {
+  const spec = (path: string, deps?: string) => ({ path, body: deps === undefined ? VALID : `---\ndepends_on: [${deps}]\n---\n${VALID}` });
+
+  it("AC2: accepts a valid dependency graph", () => {
+    expect(checkSpecs([spec("specs/001-a.md"), spec("specs/002-b.md", "1"), spec("specs/003-c.md", "1, 2")])).toEqual([]);
+  });
+
+  it("AC2: reports a missing number and a self-dependency", () => {
+    expect(checkSpecs([spec("specs/001-a.md", "9"), spec("specs/002-b.md", "2")])).toEqual([
+      "specs/001-a.md: depends on 009, but no spec has that number",
+      "specs/002-b.md: depends on itself",
+    ]);
+  });
+
+  it("AC2: reports a three-spec cycle once, from its lowest number", () => {
+    const errors = checkSpecs([spec("specs/007-c.md", "5"), spec("specs/005-a.md", "6"), spec("specs/006-b.md", "7"), spec("specs/001-x.md")]);
+    expect(errors).toEqual(["dependency cycle: 005 → 006 → 007 → 005"]);
+  });
+
+  it("AC2: reports each cycle once when two share a spec", () => {
+    const errors = checkSpecs([spec("specs/001-a.md", "2, 3"), spec("specs/002-b.md", "1"), spec("specs/003-c.md", "1")]);
+    expect(errors).toEqual(["dependency cycle: 001 → 002 → 001", "dependency cycle: 001 → 003 → 001"]);
+  });
+
+  it("AC2: passes on the specs in specs/", async () => {
+    const files = await readSpecFiles(fileURLToPath(new URL("../../specs/", import.meta.url)));
+    expect(files.length).toBeGreaterThan(0);
+    expect(checkSpecs(files)).toEqual([]);
   });
 });

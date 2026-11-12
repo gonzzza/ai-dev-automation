@@ -15,6 +15,10 @@ The file name becomes the branch name, so use lowercase kebab-case with a number
 ## Template
 
 ```markdown
+---
+depends_on: [1, 3]
+---
+
 # <Title: at most 63 characters, becomes the PR title after the SPEC-XXX prefix>
 
 ## Goal
@@ -38,6 +42,23 @@ Why this change exists and who it is for. Two or three sentences.
 - `Goal`, `Requirements` and `Acceptance criteria` are required.
 - Every top-level bullet under `Acceptance criteria` starts with a unique ID: `- AC1: ...`. The agent starts each test's name with the ID it covers (`it("AC3: ...")`), so a reviewer can trace every criterion to its tests. Indented lines and prose between bullets are fine.
 - File names are numbered, and no two specs share a number.
+- The frontmatter block is optional. Leave it out when the spec depends on nothing (see below).
+
+## Dependencies
+
+A spec that builds on others names them in a frontmatter block at the very top of the file. The [coordinator](../spec-coding-agent/README.md#coordinator-specs-in-dependency-order) (`npm run agent -- --plan`) only starts a spec once every spec it depends on has a merged PR.
+
+```markdown
+---
+depends_on: [1, 3]
+---
+```
+
+- The block starts on the first line with `---` and ends at the next `---` line. In between: `key: value` lines. `depends_on` is the only key.
+- The value is an inline list of spec numbers. Leading zeros are allowed (`003` is `3`), and `[]` means no dependencies, the same as no block.
+- These are errors, each naming the file: an unclosed block, any other key, `depends_on` given twice, a block list (`- 1` lines), an item that isn't a positive integer (`0`, `-1`, `1.5`, `abc`), and a number listed twice.
+- `spec:check` also rejects a dependency on a number no spec has, a spec that depends on itself, and dependency cycles (`dependency cycle: 005 → 006 → 005`).
+- `depends_on` only affects the order specs are started in. The agent implements each spec the same way.
 
 ## Review the spec
 
