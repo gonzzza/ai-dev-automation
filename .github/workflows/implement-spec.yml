@@ -1,4 +1,6 @@
 name: Implement a spec
+# Names each run after its spec, so the run list shows which spec a run is working on (spec 005).
+run-name: Implement ${{ inputs.spec }}${{ inputs.dry-run && ' (dry run)' || '' }}
 
 # Run by hand from the Actions tab: the agent implements one spec from specs/ and opens a PR as the
 # agent's GitHub App. The AI review and the fix cycle (ai-review.yml) take it from there, and a
