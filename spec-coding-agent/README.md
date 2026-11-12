@@ -14,6 +14,7 @@ export ANTHROPIC_API_KEY=sk-ant-...
 git switch main && git pull
 npm run agent -- specs/001-rate-limiter.md            # opens a PR
 npm run agent -- specs/001-rate-limiter.md --dry-run  # verify only, leave changes uncommitted
+npm run agent -- --plan                               # which specs are ready (see "Coordinator")
 ```
 
 Requires `git` and an authenticated [`gh`](https://cli.github.com/).
@@ -117,6 +118,55 @@ AI review ─▶ any finding ≥ medium? ──no──▶ done: the human revie
 **Setup in CI.** The fix job acts as the agent's GitHub App (see [the README](../README.md#run-the-loop-in-ci-as-a-bot)): `AGENT_APP_CLIENT_ID` and `AGENT_APP_PRIVATE_KEY` mint a one-hour token for this repository, and the App's bot authors the push, the comment and the thread replies. The workflow's own `GITHUB_TOKEN` wouldn't do: a push made with it doesn't trigger workflows, so the fix would never be reviewed.
 
 **Only the App's own PRs.** An `agent/*` branch name isn't proof: anyone with push access can create one. The fix job therefore checks that the App's bot opened the PR, and the harness checks again with `--agent-app <slug>` before it touches anything. It compares `gh`'s author against `app/<slug>` with the bot flag set, so a person who registers the App's name as a username doesn't pass.
+
+## Coordinator: specs in dependency order
+
+A spec can declare the specs it builds on with `depends_on` frontmatter (see [`specs/README.md`](../specs/README.md#dependencies)). The coordinator reads every spec, works out from GitHub which ones are ready, and starts one CI agent run per ready spec, in parallel. The agents never talk to each other. GitHub's pull requests, branches and workflow runs are the only shared state, and every exception goes to a human instead of being retried.
+
+```sh
+npm run agent -- --plan                             # print each spec's state; changes nothing
+npm run agent -- --plan --dispatch                  # also start a CI run per ready spec
+npm run agent -- --plan --dispatch --max-parallel 3
+```
+
+| Option | Default | |
+|--------|---------|---|
+| `--plan` | | Plan every spec in `specs/` (except `README.md`). Stops first if `spec:check` would fail. |
+| `--dispatch` | off | Start an *Implement a spec* run (`implement-spec.yml`) for each ready spec. |
+| `--max-parallel <n>` | `2` | Most runs to start in one wave. |
+
+`--plan` takes no spec path and can't be combined with `--fix-pr`, `--dry-run` or `--base`. `--dispatch` and `--max-parallel` need `--plan`. No agent runs in this process, so it needs no `ANTHROPIC_API_KEY`. Each dispatched run has the workflow's own turn and budget limits, so one wave spends at most `--max-parallel` times `--max-budget`. Planning needs read access to the repo through `gh`. Dispatching also needs `actions: write`.
+
+**How a spec's state is decided.** The coordinator reads every PR against `main` (`gh api --paginate …/pulls?state=all&base=main`), the `agent/*` and `spec/*` branches on `origin`, and the last 200 runs of `implement-spec.yml`. A PR belongs to spec `n` when its title starts with `SPEC-<n> ` (leading zeros don't matter, so `SPEC-004` and `SPEC-4` are spec 4, and `SPEC-0040` isn't). A run belongs to a spec when its title is exactly `Implement <spec path>`, the workflow's `run-name`. Dry runs (`… (dry run)`) and runs from before that `run-name` (`Implement a spec`) belong to no spec. The first rule that applies wins:
+
+| # | When | State |
+|---|------|-------|
+| 1 | The spec has an open PR | `in-progress (#<lowest open PR>)` |
+| 2 | It has a merged PR | `done (#<latest merged PR>)`, unless a `Revert "SPEC-<n> …` PR merged after it: `needs-human: reverted (#<revert PR>)` |
+| 3 | A run of it is in flight | `in-progress (run)` |
+| 4 | It has a PR closed without merging | `needs-human: closed (#<highest closed PR>)`. This comes before the branch rule because GitHub keeps the branch of a closed PR. |
+| 5 | Its most recent completed run failed | `needs-human: failed (<conclusion>)`. A run can fail before it pushes, or after pushing but before it opens the PR. |
+|   | Its most recent completed run succeeded | `needs-human: no-pr`. A successful run always opens a `SPEC-` PR, so that PR was retitled or deleted. |
+| 6 | `agent/<slug>` or `spec/<slug>` exists on `origin` | `in-progress (<branch>)`. The branch is the claim: the agent refuses to start on an existing branch. |
+| 7 | Every `depends_on` spec is `done` | `ready`, otherwise `blocked: waiting on <the unfinished ones>` |
+
+**Never retried.** Reverts, closed PRs, failed runs and runs that left no PR all go to a human. The coordinator never starts them again on its own, and fixing the cause doesn't change the state by itself. To re-arm a `needs-human` spec:
+
+1. Fix the cause (the spec, the code on `main`, the limits).
+2. Delete the spec's `agent/<slug>` branch on `origin` if it still exists. The agent refuses to start on an existing branch, and GitHub keeps the branch of a PR closed without merging.
+3. Run *Implement a spec* for it by hand.
+
+While that run is in flight, a `closed`, `failed` or `no-pr` spec shows `in-progress (run)`. A `reverted` spec stays `needs-human` until the new PR opens, since the merged-PR rule comes first, and becomes `done` when that PR merges. The run history is the last 200 runs, so a failure older than that is no longer seen, and the spec can get at most one more automatic attempt.
+
+**Dispatching.** With `--dispatch`:
+
+- It runs `git fetch origin main`, and stops unless `HEAD` is `origin/main` and nothing under `specs/` has uncommitted changes. The workflow implements the spec as it is on `main`, so the plan must be made from the same specs.
+- It starts nothing while any run of `implement-spec.yml` is in flight, dry runs included. One wave at a time keeps a wave's spend bounded and the plan simple.
+- Otherwise it starts up to `--max-parallel` ready specs, lowest number first, each with `gh workflow run implement-spec.yml --ref main -f spec=<path>`. A failed dispatch stops the rest, and the error names the ones already started.
+- `gh workflow run` returns before GitHub lists the run, so it then re-lists runs every 5 seconds until each dispatched spec has a run whose id it hadn't seen, finished or not, and fails after 60 seconds. A pass started after it returns sees every run it started.
+- **Two passes started at the same moment can both dispatch the same spec.** Nothing here locks. A workflow that runs the coordinator on every merge to `main` (not part of this repo yet) needs a single `concurrency` group to prevent that.
+
+The audit log gets a `plan.result` event with the whole plan, and one `dispatch` event per spec started.
 
 ## Audit log and monitoring
 

@@ -5,19 +5,21 @@ import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 import { parseArgs, parseEnv } from "node:util";
 import { runAgent, specTask, type AgentConfig } from "./agent.js";
-import { parseLimit, scopeDir } from "./args.js";
+import { parseLimit, scopeDir, usageErrorOf } from "./args.js";
 import { assertSandboxAvailable, DEFAULT_SANDBOX_IMAGE, prepareSandbox, runChecks, type Sandbox } from "./checks.js";
+import { runCoordinator } from "./coordinate.js";
 import { exec, run } from "./exec.js";
 import { fixTask, loadFixTemplate, parseFindings, runFixCycle, SEVERITIES, specPathForBranch, type Severity } from "./fix.js";
 import { Git } from "./git.js";
 import { runPipeline } from "./pipeline.js";
 import { JsonlRunLog, newRunId, withRunLog } from "./runlog.js";
 import { checksEnv, secretValues } from "./secrets.js";
-import { parseSpec } from "./spec.js";
+import { checkSpecs, parseSpec, readSpecFiles } from "./spec.js";
 import { loadAgentStandards } from "./standards.js";
 
 const USAGE = `Usage: npm run agent -- <spec.md> [options]
        npm run agent -- --fix-pr <number> --findings <file.json> [options]
+       npm run agent -- --plan [--dispatch] [--max-parallel <n>]
 
 Options:
   --scope <dir>       Directory the agent may change (repeatable). Default: demo-app
@@ -44,14 +46,21 @@ Fix cycle (run on a checked-out agent/* PR branch):
   --reviewed-sha <sha>   Commit the findings are about; refuse if the branch moved since
   --min-severity <level> Findings below this are left for the human. Default: medium
   --max-cycles <n>       Stop after this many fix commits on the PR. Default: 5
-  --agent-app <slug>     Refuse unless this GitHub App opened the PR (the agent's App, in CI)`;
+  --agent-app <slug>     Refuse unless this GitHub App opened the PR (the agent's App, in CI)
+
+Coordinator (plans every spec in specs/ from GitHub's state; no API key needed):
+  --plan                 Print each spec's state: done, in-progress, needs-human, blocked or ready
+  --dispatch             Also start one "Implement a spec" CI run per ready spec. Run from an
+                         up-to-date main; needs actions: write. Nothing starts while a run is in flight
+  --max-parallel <n>     Most runs to start in one wave. Default: 2`;
 
 async function main(): Promise<void> {
   const { values, positionals } = parseArgs({
     allowPositionals: true,
     options: {
       scope: { type: "string", multiple: true, default: ["demo-app"] },
-      base: { type: "string", default: "main" },
+      // No parseArgs default, so --plan can tell an explicit --base apart. The default is applied below.
+      base: { type: "string" },
       model: { type: "string", default: "claude-opus-5-5" },
       effort: { type: "string", default: "high" },
       "max-turns": { type: "string", default: "60" },
@@ -70,15 +79,30 @@ async function main(): Promise<void> {
       "min-severity": { type: "string", default: "medium" },
       "max-cycles": { type: "string", default: "5" },
       "agent-app": { type: "string" },
+      plan: { type: "boolean", default: false },
+      dispatch: { type: "boolean", default: false },
+      "max-parallel": { type: "string" },
       help: { type: "boolean", short: "h", default: false },
     },
   });
   const fixMode = values["fix-pr"] !== undefined;
-  if (values.help || positionals.length !== (fixMode ? 0 : 1)) {
+  const planMode = values.plan;
+  const usageError = usageErrorOf({
+    plan: planMode,
+    positionals: positionals.length,
+    fixPr: fixMode,
+    dryRun: values["dry-run"],
+    base: values.base !== undefined,
+    dispatch: values.dispatch,
+    maxParallel: values["max-parallel"] !== undefined,
+  });
+  if (values.help || usageError) {
+    if (usageError && !values.help) console.error(usageError);
     console.log(USAGE);
     process.exitCode = values.help ? 0 : 1;
     return;
   }
+  const base = values.base ?? "main";
 
   // npm runs workspace scripts from the workspace dir, so resolve against where the user ran it.
   const userCwd = process.env.INIT_CWD ?? process.cwd();
@@ -105,8 +129,30 @@ async function main(): Promise<void> {
   const runLink = GITHUB_SERVER_URL && GITHUB_REPOSITORY && GITHUB_RUN_ID ? `${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}` : undefined;
   console.log(`Run ${runLog.runId}. Audit log: ${runLog.path}`);
 
-  const start = { mode: fixMode ? "fix" : "spec", args: process.argv.slice(2), node: process.version, ...(runLink ? { ciRun: runLink } : {}) };
+  const mode = planMode ? "plan" : fixMode ? "fix" : "spec";
+  const start = { mode, args: process.argv.slice(2), node: process.version, ...(runLink ? { ciRun: runLink } : {}) };
   await withRunLog(runLog, start, async () => {
+    // No agent runs in this process in plan mode, so it needs no API key. Each dispatched CI run has
+    // its own turn and budget limits.
+    if (planMode) {
+      const maxParallel = parseLimit("--max-parallel", values["max-parallel"] ?? "2", { integer: true });
+      const files = await readSpecFiles(resolve(repoRoot, "specs"));
+      const errors = checkSpecs(files);
+      if (errors.length) throw new Error(`Invalid specs:\n${errors.map((e) => `  ${e}`).join("\n")}`);
+      const result = await runCoordinator({
+        specs: files.map((f) => parseSpec(f.path, f.body)),
+        exec,
+        repoRoot,
+        dispatch: values.dispatch,
+        maxParallel,
+        log: say,
+        runLog,
+      });
+      if (!values.dispatch) console.log("\n✅ Plan only. Pass --dispatch to start runs for ready specs.");
+      else if (result.dispatched.length) console.log(`\n✅ Dispatched ${result.dispatched.join(", ")}.`);
+      else console.log("\n✅ Nothing dispatched.");
+      return { dispatched: result.dispatched, inFlightRuns: result.inFlightRuns };
+    }
     if (!process.env.ANTHROPIC_API_KEY) throw new Error("Set ANTHROPIC_API_KEY (environment or .env at the repo root).");
     const effort = values.effort as AgentConfig["effort"];
     if (!["low", "medium", "high", "xhigh", "max"].includes(effort)) throw new Error(`Invalid --effort: ${effort}`);
@@ -232,12 +278,12 @@ async function main(): Promise<void> {
 
     const specFile = resolve(userCwd, positionals[0]!);
     const spec = parseSpec(relative(repoRoot, specFile), await readFile(specFile, "utf8"));
-    runLog.event({ type: "spec.input", spec: spec.path, base: values.base, dryRun: values["dry-run"], body: spec.body });
+    runLog.event({ type: "spec.input", spec: spec.path, base, dryRun: values["dry-run"], body: spec.body });
     const result = await runPipeline({
       ...gates,
       spec,
       git,
-      base: values.base,
+      base,
       model: config.model,
       dryRun: values["dry-run"],
       runId: runLog.runId,
