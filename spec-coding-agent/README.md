@@ -164,9 +164,11 @@ While that run is in flight, a `closed`, `failed` or `no-pr` spec shows `in-prog
 - It starts nothing while any run of `implement-spec.yml` is in flight, dry runs included. One wave at a time keeps a wave's spend bounded and the plan simple.
 - Otherwise it starts up to `--max-parallel` ready specs, lowest number first, each with `gh workflow run implement-spec.yml --ref main -f spec=<path>`. A failed dispatch stops the rest, and the error names the ones already started.
 - `gh workflow run` returns before GitHub lists the run, so it then re-lists runs every 5 seconds until each dispatched spec has a run whose id it hadn't seen, finished or not, and fails after 60 seconds. A pass started after it returns sees every run it started.
-- **Two passes started at the same moment can both dispatch the same spec.** Nothing here locks. A workflow that runs the coordinator on every merge to `main` (not part of this repo yet) needs a single `concurrency` group to prevent that.
+- **Two passes started at the same moment can both dispatch the same spec.** Nothing here locks. The *Plan spec runs* workflow prevents it with a single `concurrency` group for its dispatching job.
 
 The audit log gets a `plan.result` event with the whole plan, and one `dispatch` event per spec started.
+
+**In CI.** The *Plan spec runs* workflow ([`plan-specs.yml`](../.github/workflows/plan-specs.yml)) runs `--plan` on every push to `main` and writes the plan to the run's summary, so each merge shows which specs it unblocked. It also plans when an *Implement a spec* run finishes, since a failed run, or one that opened its PR, changes a spec's state without a push. Only a person dispatches: run the workflow from the Actions tab with *dispatch* checked (and optionally *max-parallel*). A merge never starts agent runs on its own, because CI agent runs are limited to `demo-app`. A spec that changes the harness itself shows as `ready` but is coded in a session with `/code-spec`. The plan job only reads (`contents`, `pull-requests` and `actions: read`). The dispatch job also gets `actions: write`, and its runs start the usual *Implement a spec* workflow, which acts as the agent's App.
 
 ## Audit log and monitoring
 

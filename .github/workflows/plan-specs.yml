@@ -1,0 +1,120 @@
+name: Plan spec runs
+run-name: ${{ inputs.dispatch && 'Plan and dispatch spec runs' || 'Plan spec runs' }}
+
+# The coordinator (spec 005) works out from GitHub's state which specs are done, in progress,
+# waiting on a human, blocked by their depends_on, or ready, and writes that plan to the run's
+# summary. Every push to main plans, because a merge is what moves specs along. So does every
+# finished *Implement a spec* run, because a failed run, or one that opened its PR, changes a
+# spec's state without a push. Only a person dispatches: run this workflow by hand with
+# "dispatch" checked to start one *Implement a spec* run per ready spec. CI agent runs are
+# limited to demo-app, and a spec that changes the harness itself is coded in a session
+# (/code-spec), so neither a merge nor a finished run ever spends API money on its own.
+on:
+  push:
+    branches: [main]
+  # Runs on main with no inputs, so only the plan job runs: a finished run never dispatches more.
+  workflow_run:
+    workflows: ["Implement a spec"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      dispatch:
+        description: "Start an Implement a spec run for each ready spec"
+        type: boolean
+        default: false
+      max-parallel:
+        description: "Most runs to start in one wave"
+        type: number
+        default: 2
+
+permissions: {}
+
+env:
+  GH_REPO: ${{ github.repository }}
+
+# An explicit shell: bash runs steps with -eo pipefail. Without it GitHub uses bash -e, and a step
+# that pipes the coordinator into tee would pass when the coordinator fails.
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  plan:
+    if: github.ref == 'refs/heads/main' && !inputs.dispatch
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: read # gh run list, for runs in flight
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      - name: Plan
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: npm run -s agent -- --plan 2>&1 | tee "$RUNNER_TEMP/plan.txt"
+      - name: Summary
+        if: always()
+        env:
+          OUTCOME: ${{ steps.plan.outcome }}
+        run: |
+          {
+            echo '## Spec plan'
+            if [ "$OUTCOME" != success ]; then echo "**The plan failed ($OUTCOME).** Its output, if any:"; fi
+            echo '```'
+            cat "$RUNNER_TEMP/plan.txt" 2>/dev/null || true
+            echo '```'
+            if [ "$OUTCOME" = success ]; then echo 'To start runs for the ready specs, run this workflow by hand with *dispatch* checked.'; fi
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  dispatch:
+    if: github.ref == 'refs/heads/main' && inputs.dispatch
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    # One dispatching pass at a time: two passes started together would both see the same spec as
+    # ready and both start it. Plan-only runs change nothing, so they don't queue behind this.
+    concurrency:
+      group: plan-specs-dispatch
+      cancel-in-progress: false
+    permissions:
+      contents: read
+      pull-requests: read
+      actions: write # gh workflow run implement-spec.yml
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version-file: .nvmrc
+          cache: npm
+      - run: npm ci
+      # Runs started with GITHUB_TOKEN don't normally trigger workflows, but workflow_dispatch is
+      # the exception, so the Implement a spec runs start as usual and mint the agent App's token.
+      # The coordinator stops unless this checkout is still the tip of main.
+      - name: Plan and dispatch
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+          MAX_PARALLEL: ${{ inputs.max-parallel }}
+        run: npm run -s agent -- --plan --dispatch --max-parallel "$MAX_PARALLEL" 2>&1 | tee "$RUNNER_TEMP/plan.txt"
+      - name: Summary
+        if: always()
+        env:
+          OUTCOME: ${{ steps.plan.outcome }}
+        run: |
+          {
+            echo '## Spec plan and dispatch'
+            if [ "$OUTCOME" != success ]; then echo "**Planning or dispatching failed ($OUTCOME).** Any specs already started are named in the output:"; fi
+            echo '```'
+            cat "$RUNNER_TEMP/plan.txt" 2>/dev/null || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
