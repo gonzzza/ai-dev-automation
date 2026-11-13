@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { formatPlanned, type PlannedSpec, type SpecState } from "../src/coordinate.js";
 import type { Exec, ExecResult } from "../src/exec.js";
-import { applyLocalWorktrees, childExitCode, parseWorktreeList, runLocalWave, type LocalWaveDeps, type SpawnAgent } from "../src/local.js";
+import { applyLocalWorktrees, childExitCode, cmdArg, parseWorktreeList, runLocalWave, spawnLines, type LocalWaveDeps, type SpawnAgent } from "../src/local.js";
 import type { RunEvent, RunLog } from "../src/runlog.js";
 import { parseSpec, type Spec } from "../src/spec.js";
 
@@ -60,7 +60,7 @@ describe("applyLocalWorktrees", () => {
     expect(formatPlanned(planned(6, state))).toBe("006 needs-human: local-worktree (/wt/006-x)");
   });
 
-  it("parses the worktree paths of git worktree list --porcelain", () => {
+  it("AC4: parses the worktree paths of git worktree list --porcelain", () => {
     const out = "worktree C:/repo\nHEAD abc\nbranch refs/heads/main\n\nworktree C:/repo-worktrees/001-x\nHEAD def\ndetached\n";
     expect(parseWorktreeList(out)).toEqual(["C:/repo", "C:/repo-worktrees/001-x"]);
   });
@@ -72,6 +72,57 @@ describe("childExitCode", () => {
     expect(childExitCode(1, null)).toBe(1);
     expect(childExitCode(null, "SIGTERM")).toBe(1);
     expect(childExitCode(null, "SIGKILL")).toBe(1);
+  });
+});
+
+describe("cmdArg", () => {
+  it("leaves plain arguments alone and quotes ones with spaces or shell characters", () => {
+    expect(cmdArg("--scope")).toBe("--scope");
+    expect(cmdArg("C:\\Users\\me\\runs")).toBe("C:\\Users\\me\\runs");
+    expect(cmdArg("C:\\Users\\Jo Smith\\runs")).toBe('"C:\\Users\\Jo Smith\\runs"');
+    expect(cmdArg("a&b|c<d>e^f")).toBe('"a&b|c<d>e^f"');
+    expect(cmdArg("")).toBe('""');
+  });
+
+  it("doubles trailing backslashes inside quotes, so they don't escape the closing quote", () => {
+    expect(cmdArg("C:\\Jo Smith\\")).toBe('"C:\\Jo Smith\\\\"');
+    expect(cmdArg("C:\\Jo Smith\\\\")).toBe('"C:\\Jo Smith\\\\\\\\"');
+    expect(cmdArg("C:\\NoSpace\\")).toBe("C:\\NoSpace\\");
+  });
+
+  it.each(['say "hi"', "%PATH%", "wow!", "a\nb", "a\rb"])("refuses %j, which cmd would expand or split", (arg) => {
+    expect(() => cmdArg(arg)).toThrow(/Can't pass .* to npm safely on Windows/);
+  });
+});
+
+// Real child processes: node itself, offline and fast.
+describe("spawnLines", () => {
+  const script = (code: number) =>
+    `process.stdout.write("out one\\nout two\\n"); process.stderr.write("err one\\n"); process.exitCode = ${code};`;
+
+  it.each([0, 3, 1])("streams stdout and stderr line by line and resolves to exit code %i", async (code) => {
+    const lines: string[] = [];
+    const exit = await spawnLines(process.execPath, ["-e", script(code)], { cwd: tmpdir(), env: process.env, onLine: (l) => lines.push(l) });
+    expect(exit).toBe(code);
+    expect(lines.sort()).toEqual(["err one", "out one", "out two"]);
+  });
+
+  it("passes cwd and env to the child", async () => {
+    const lines: string[] = [];
+    const cwd = realpathSync(tmpdir());
+    await spawnLines(process.execPath, ["-e", "console.log(process.cwd()); console.log(process.env.WAVE_TEST)"], {
+      cwd,
+      env: { ...process.env, WAVE_TEST: "from-the-wave" },
+      onLine: (l) => lines.push(l),
+    });
+    expect(lines.map((l) => l.toLowerCase())).toEqual([cwd.toLowerCase(), "from-the-wave"]);
+  });
+
+  it("resolves to 1 and reports it when the command can't start", async () => {
+    const lines: string[] = [];
+    const exit = await spawnLines(join(tmpdir(), "no-such-command-for-the-wave"), [], { cwd: tmpdir(), env: process.env, onLine: (l) => lines.push(l) });
+    expect(exit).toBe(1);
+    expect(lines[0]).toMatch(/^Could not start the run: .*ENOENT/);
   });
 });
 
@@ -274,7 +325,7 @@ describe("runLocalWave", () => {
     expect(logged.some((l) => l.startsWith(`⚠️ Could not remove the worktree; remove ${wt("001-a")} by hand`))).toBe(true);
   });
 
-  it("skips specs whose worktree a previous wave kept", async () => {
+  it("AC4: skips specs whose worktree a previous wave kept", async () => {
     mkdirSync(dir);
     const kept = join(realpathSync(dir), "001-a").replace(/\\/g, "/");
     const { exec } = fakeExec((line) => (line === "git worktree list --porcelain" ? ok(`worktree /repo\n\nworktree ${kept}\ndetached\n`) : undefined));

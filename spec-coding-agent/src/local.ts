@@ -60,24 +60,26 @@ export type SpawnAgent = (args: string[], options: SpawnOptions) => Promise<numb
 
 /**
  * Quotes an argument for the Windows shell. `%` and `!` expand even inside quotes, and a `"` would
- * end the quoting, so those are refused rather than escaped.
+ * end the quoting, so those are refused rather than escaped. Inside quotes, backslashes before the
+ * closing quote are doubled, or the program's argument parser would read `\"` as a literal quote.
  */
-function cmdArg(arg: string): string {
+export function cmdArg(arg: string): string {
   if (/["%!\r\n]/.test(arg)) throw new Error(`Can't pass ${JSON.stringify(arg)} to npm safely on Windows.`);
-  return /^[\w\-.,:\\/=@+]+$/.test(arg) ? arg : `"${arg}"`;
+  if (/^[\w\-.,:\\/=@+]+$/.test(arg)) return arg;
+  return `"${arg.replace(/(\\+)$/, "$1$1")}"`;
 }
 
 /**
- * Runs `npm run agent -- <args>` and streams its output line by line. Like exec, it uses a shell
- * only for npm on Windows, where npm is a .cmd script.
+ * Runs a command and streams its stdout and stderr line by line, resolving to its exit code (1 if
+ * it couldn't start or was killed by a signal). Like exec, it uses a shell only for npm on Windows,
+ * where npm is a .cmd script, with every argument passed through cmdArg.
  */
-export const spawnAgent: SpawnAgent = (args, { cwd, env, onLine }) =>
-  new Promise((resolve) => {
-    const npmArgs = ["run", "agent", "--", ...args];
+export function spawnLines(command: string, args: string[], { cwd, env, onLine }: SpawnOptions): Promise<number> {
+  return new Promise((resolve) => {
     const child =
-      process.platform === "win32"
-        ? spawn(["npm", ...npmArgs].map(cmdArg).join(" "), { cwd, env, shell: true })
-        : spawn("npm", npmArgs, { cwd, env });
+      process.platform === "win32" && command === "npm"
+        ? spawn([command, ...args].map(cmdArg).join(" "), { cwd, env, shell: true })
+        : spawn(command, args, { cwd, env });
     for (const stream of [child.stdout, child.stderr]) createInterface({ input: stream }).on("line", onLine);
     child.on("error", (error) => {
       onLine(`Could not start the run: ${error.message}`);
@@ -85,6 +87,10 @@ export const spawnAgent: SpawnAgent = (args, { cwd, env, onLine }) =>
     });
     child.on("close", (code, signal) => resolve(childExitCode(code, signal)));
   });
+}
+
+/** Runs `npm run agent -- <args>` in the worktree given as `cwd`. */
+export const spawnAgent: SpawnAgent = (args, options) => spawnLines("npm", ["run", "agent", "--", ...args], options);
 
 export interface LocalWaveDeps {
   specs: readonly Spec[];

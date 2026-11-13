@@ -114,7 +114,7 @@ describe("Git claim and push", () => {
     await expect(git.claimBranch("agent/x")).rejects.toThrow(/stale info/);
   });
 
-  it("branchExistsOnOrigin matches the ref exactly, and throws when ls-remote fails", async () => {
+  it("AC2: branchExistsOnOrigin matches the ref exactly, and throws when ls-remote fails", async () => {
     const listed = fakeGit(() => ({ code: 0, stdout: "abc\trefs/heads/agent/x-old\ndef\trefs/heads/agent/x\n" }));
     expect(await listed.git.branchExistsOnOrigin("agent/x")).toBe(true);
     expect(listed.calls[0]).toEqual([...SAFE, "ls-remote", "--heads", "origin", "refs/heads/agent/x"]);
