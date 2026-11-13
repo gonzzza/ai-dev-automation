@@ -80,3 +80,62 @@ describe("Git review threads", () => {
     expect(calls).toHaveLength(1);
   });
 });
+
+describe("Git claim and push", () => {
+  const SAFE = ["-c", "core.hooksPath=/dev/null", "-c", "core.fsmonitor=false"];
+  function fakeGit(answer: (args: string[]) => { code: number; stdout: string; stderr?: string }) {
+    const calls: string[][] = [];
+    const exec: Exec = vi.fn(async (_command: string, args: string[]) => {
+      calls.push(args);
+      const { code, stdout, stderr = "" } = answer(args);
+      return { code, stdout, stderr };
+    });
+    return { git: new Git(exec, "/repo"), calls };
+  }
+  const created = "To ../origin.git\n*\trefs/heads/agent/x:refs/heads/agent/x\t[new branch]\nDone";
+
+  it("AC2: claimBranch runs the lease push that only creates, and push has no -u", async () => {
+    const { git, calls } = fakeGit((args) => ({ code: 0, stdout: args.includes("--porcelain") ? created : "" }));
+    await git.claimBranch("agent/x");
+    await git.push("agent/x");
+    expect(calls).toEqual([
+      [...SAFE, "push", "--porcelain", "--no-verify", "--force-with-lease=agent/x:", "origin", "agent/x"],
+      [...SAFE, "push", "--no-verify", "origin", "agent/x"],
+    ]);
+  });
+
+  it("AC2: claimBranch fails when git reports the branch already up to date on origin, which skips the lease", async () => {
+    const { git } = fakeGit(() => ({ code: 0, stdout: "To ../origin.git\n=\trefs/heads/agent/x:refs/heads/agent/x\t[up to date]\nDone" }));
+    await expect(git.claimBranch("agent/x")).rejects.toThrow(/did not create agent\/x on origin/);
+  });
+
+  it("AC2: claimBranch fails with git's output when the lease rejects the push", async () => {
+    const { git } = fakeGit(() => ({ code: 1, stdout: "", stderr: "! refs/heads/agent/x:refs/heads/agent/x [rejected] (stale info)" }));
+    await expect(git.claimBranch("agent/x")).rejects.toThrow(/stale info/);
+  });
+
+  it("branchExistsOnOrigin matches the ref exactly, and throws when ls-remote fails", async () => {
+    const listed = fakeGit(() => ({ code: 0, stdout: "abc\trefs/heads/agent/x-old\ndef\trefs/heads/agent/x\n" }));
+    expect(await listed.git.branchExistsOnOrigin("agent/x")).toBe(true);
+    expect(listed.calls[0]).toEqual([...SAFE, "ls-remote", "--heads", "origin", "refs/heads/agent/x"]);
+    const suffix = fakeGit(() => ({ code: 0, stdout: "abc\trefs/heads/agent/x-old\n" }));
+    expect(await suffix.git.branchExistsOnOrigin("agent/x")).toBe(false);
+    const offline = fakeGit(() => ({ code: 128, stdout: "", stderr: "fatal: unable to access" }));
+    await expect(offline.git.branchExistsOnOrigin("agent/x")).rejects.toThrow(/unable to access/);
+  });
+
+  it("branchExists still reads an unreachable origin as no branch, and leaves the failure to the claim", async () => {
+    const { git } = fakeGit((args) => (args.includes("rev-parse") ? { code: 1, stdout: "" } : { code: 128, stdout: "", stderr: "fatal" }));
+    expect(await git.branchExists("agent/x")).toBe(false);
+  });
+
+  it("AC1: headOnBase maps merge-base --is-ancestor's 0 and 1, and throws on anything else", async () => {
+    for (const [code, expected] of [[0, true], [1, false]] as const) {
+      const { git, calls } = fakeGit(() => ({ code, stdout: "" }));
+      expect(await git.headOnBase("main")).toBe(expected);
+      expect(calls[0]).toEqual([...SAFE, "merge-base", "--is-ancestor", "HEAD", "refs/remotes/origin/main"]);
+    }
+    const { git } = fakeGit(() => ({ code: 128, stdout: "", stderr: "fatal: Not a valid object name refs/remotes/origin/main" }));
+    await expect(git.headOnBase("main")).rejects.toThrow(/Not a valid object name/);
+  });
+});

@@ -2,16 +2,17 @@
 import { existsSync } from "node:fs";
 import { lstat, mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, relative, resolve } from "node:path";
+import { basename, dirname, join, relative, resolve } from "node:path";
 import { parseArgs, parseEnv } from "node:util";
 import { runAgent, specTask, type AgentConfig } from "./agent.js";
-import { parseLimit, scopeDir, usageErrorOf } from "./args.js";
+import { parseLimit, scopeDir, usageErrorOf, waveAgentArgs } from "./args.js";
 import { assertSandboxAvailable, DEFAULT_SANDBOX_IMAGE, prepareSandbox, runChecks, type Sandbox } from "./checks.js";
 import { runCoordinator } from "./coordinate.js";
 import { exec, run } from "./exec.js";
 import { fixTask, loadFixTemplate, parseFindings, runFixCycle, SEVERITIES, specPathForBranch, type Severity } from "./fix.js";
 import { Git } from "./git.js";
-import { runPipeline } from "./pipeline.js";
+import { runLocalWave, spawnAgent } from "./local.js";
+import { exitCodeFor, runPipeline } from "./pipeline.js";
 import { JsonlRunLog, newRunId, withRunLog } from "./runlog.js";
 import { checksEnv, secretValues } from "./secrets.js";
 import { checkSpecs, parseSpec, readSpecFiles } from "./spec.js";
@@ -20,6 +21,7 @@ import { loadAgentStandards } from "./standards.js";
 const USAGE = `Usage: npm run agent -- <spec.md> [options]
        npm run agent -- --fix-pr <number> --findings <file.json> [options]
        npm run agent -- --plan [--dispatch] [--max-parallel <n>]
+       npm run agent -- --plan --local [--max-parallel <n>] [--worktree-dir <dir>] [options]
 
 Options:
   --scope <dir>       Directory the agent may change (repeatable). Default: demo-app
@@ -52,7 +54,11 @@ Coordinator (plans every spec in specs/ from GitHub's state; no API key needed):
   --plan                 Print each spec's state: done, in-progress, needs-human, blocked or ready
   --dispatch             Also start one "Implement a spec" CI run per ready spec. Run from an
                          up-to-date main; needs actions: write. Nothing starts while a run is in flight
-  --max-parallel <n>     Most runs to start in one wave. Default: 2`;
+  --max-parallel <n>     Most runs to start in one wave. Default: 2
+  --local                Run the ready specs on this machine instead, each in its own git worktree,
+                         in parallel. Needs ANTHROPIC_API_KEY. The run options above (scope, model,
+                         limits, sandbox, standards, log dir) go to every run
+  --worktree-dir <dir>   Where --local puts its worktrees. Default: <repo>-worktrees next to the repo`;
 
 async function main(): Promise<void> {
   const { values, positionals } = parseArgs({
@@ -82,6 +88,8 @@ async function main(): Promise<void> {
       plan: { type: "boolean", default: false },
       dispatch: { type: "boolean", default: false },
       "max-parallel": { type: "string" },
+      local: { type: "boolean", default: false },
+      "worktree-dir": { type: "string" },
       help: { type: "boolean", short: "h", default: false },
     },
   });
@@ -95,6 +103,8 @@ async function main(): Promise<void> {
     base: values.base !== undefined,
     dispatch: values.dispatch,
     maxParallel: values["max-parallel"] !== undefined,
+    local: values.local,
+    worktreeDir: values["worktree-dir"] !== undefined,
   });
   if (values.help || usageError) {
     if (usageError && !values.help) console.error(usageError);
@@ -139,8 +149,44 @@ async function main(): Promise<void> {
       const files = await readSpecFiles(resolve(repoRoot, "specs"));
       const errors = checkSpecs(files);
       if (errors.length) throw new Error(`Invalid specs:\n${errors.map((e) => `  ${e}`).join("\n")}`);
+      const specs = files.map((f) => parseSpec(f.path, f.body));
+      if (values.local) {
+        // Each run is a full agent run with its own limits, so a wave spends at most
+        // --max-parallel times --max-budget. Bad options fail here, before any worktree exists.
+        if (!process.env.ANTHROPIC_API_KEY) throw new Error("Set ANTHROPIC_API_KEY (environment or .env at the repo root).");
+        parseLimit("--max-turns", values["max-turns"], { integer: true });
+        parseLimit("--max-budget", values["max-budget"]);
+        const sandbox = sandboxOf(values.sandbox, values["sandbox-image"]);
+        let prepare: (() => Promise<unknown>) | undefined;
+        if (sandbox.kind === "docker") {
+          const env = { ...checksEnv(process.env, await mkdtemp(resolve(tmpdir(), "agent-gh-"))), ...dockerClientEnv() };
+          await assertSandboxAvailable(exec, sandbox, env);
+          prepare = () => prepareSandbox(exec, repoRoot, sandbox, { env, log: say, readLockfile: () => readFile(resolve(repoRoot, "package-lock.json"), "utf8") });
+        }
+        const result = await runLocalWave({
+          specs,
+          exec,
+          repoRoot,
+          worktreeDir: values["worktree-dir"] !== undefined ? resolve(userCwd, values["worktree-dir"]) : resolve(dirname(repoRoot), `${basename(repoRoot)}-worktrees`),
+          maxParallel,
+          agentArgs: waveAgentArgs({ ...values, "log-dir": resolve(userCwd, values["log-dir"]) }),
+          // A worktree has no .env, so the key goes through the environment, which already holds it.
+          env: { ...process.env },
+          spawnAgent,
+          prepareSandbox: prepare,
+          log: say,
+          runLog,
+        });
+        const { plan: _plan, ...summary } = result;
+        if (!result.started.length) console.log("\n✅ Nothing started.");
+        else if (result.failed.length) {
+          console.log(`\n❌ Failed: ${result.failed.map((f) => `${f.spec} (exit ${f.exitCode}, kept ${f.worktree})`).join(", ")}.`);
+          process.exitCode = 1;
+        } else console.log(`\n✅ Wave finished: ${result.succeeded.length} opened a PR, ${result.lostClaim.length} lost the claim to another run.`);
+        return summary;
+      }
       const result = await runCoordinator({
-        specs: files.map((f) => parseSpec(f.path, f.body)),
+        specs,
         exec,
         repoRoot,
         dispatch: values.dispatch,
@@ -156,14 +202,9 @@ async function main(): Promise<void> {
     if (!process.env.ANTHROPIC_API_KEY) throw new Error("Set ANTHROPIC_API_KEY (environment or .env at the repo root).");
     const effort = values.effort as AgentConfig["effort"];
     if (!["low", "medium", "high", "xhigh", "max"].includes(effort)) throw new Error(`Invalid --effort: ${effort}`);
-    if (values.sandbox !== "none" && values.sandbox !== "docker") throw new Error(`Invalid --sandbox: ${values.sandbox}`);
-    // The container runs as this user on Linux and macOS, so files the tests create are ours.
-    const sandbox: Sandbox =
-      values.sandbox === "docker" ? { kind: "docker", image: values["sandbox-image"], uid: process.getuid?.(), gid: process.getgid?.() } : { kind: "none" };
+    const sandbox = sandboxOf(values.sandbox, values["sandbox-image"]);
     const checksEnvironment = checksEnv(process.env, await mkdtemp(resolve(tmpdir(), "agent-gh-")));
-    // With the sandbox, that environment only reaches the docker client, which may need to know
-    // where its daemon is. Nothing of it passes into the container.
-    const dockerClient = Object.fromEntries(Object.entries(process.env).filter(([name]) => /^DOCKER_(HOST|CONTEXT|CONFIG|CERT_PATH|TLS_VERIFY)$/.test(name)));
+    const dockerClient = dockerClientEnv();
     const config: AgentConfig = {
       repoRoot,
       writableDirs: values.scope.map((dir) => scopeDir(repoRoot, userCwd, dir)),
@@ -300,7 +341,22 @@ async function main(): Promise<void> {
   });
 }
 
+/** The --sandbox option. The container runs as this user on Linux and macOS, so files the tests create are ours. */
+function sandboxOf(kind: string, image: string): Sandbox {
+  if (kind !== "none" && kind !== "docker") throw new Error(`Invalid --sandbox: ${kind}`);
+  return kind === "docker" ? { kind: "docker", image, uid: process.getuid?.(), gid: process.getgid?.() } : { kind: "none" };
+}
+
+/**
+ * With the sandbox, the checks environment only reaches the docker client, which may need to know
+ * where its daemon is. Nothing of it passes into the container.
+ */
+function dockerClientEnv(): NodeJS.ProcessEnv {
+  return Object.fromEntries(Object.entries(process.env).filter(([name]) => /^DOCKER_(HOST|CONTEXT|CONFIG|CERT_PATH|TLS_VERIFY)$/.test(name)));
+}
+
+// Exit code 3 means another run claimed the spec first; a local wave cleans up after it.
 main().catch((error: unknown) => {
   console.error(`\n❌ ${error instanceof Error ? error.message : String(error)}`);
-  process.exitCode = 1;
+  process.exitCode = exitCodeFor(error);
 });
