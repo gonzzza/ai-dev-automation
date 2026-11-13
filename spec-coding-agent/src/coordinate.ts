@@ -34,6 +34,8 @@ export type SpecState =
   | { status: "needs-human"; reason: "closed" | "reverted"; pr: number }
   | { status: "needs-human"; reason: "failed"; conclusion: string }
   | { status: "needs-human"; reason: "no-pr" }
+  /** A local wave kept this spec's worktree after its run failed. */
+  | { status: "needs-human"; reason: "local-worktree"; worktree: string }
   | { status: "blocked"; waitingOn: number[] }
   | { status: "ready" };
 
@@ -134,6 +136,7 @@ export function formatPlanned({ number, state }: PlannedSpec): string {
       case "needs-human":
         if (state.reason === "failed") return `needs-human: failed (${state.conclusion})`;
         if (state.reason === "no-pr") return "needs-human: no-pr";
+        if (state.reason === "local-worktree") return `needs-human: local-worktree (${state.worktree})`;
         return `needs-human: ${state.reason} (#${state.pr})`;
       case "blocked":
         return `blocked: waiting on ${state.waitingOn.map(padSpecNumber).join(", ")}`;
@@ -186,6 +189,30 @@ export function parseRuns(stdout: string): RunSummary[] {
   }));
 }
 
+/** The three reads every plan is made from: PRs against main, agent/spec branches on origin, and runs. */
+export async function readGithubState(exec: Exec, repoRoot: string): Promise<GithubState> {
+  const sh = (command: string, args: string[]) => run(exec, command, args, repoRoot);
+  return {
+    pulls: parsePulls(await sh("gh", PULLS_ARGS)),
+    branches: parseBranches(await sh("git", BRANCHES_ARGS)),
+    runs: parseRuns(await sh("gh", RUNS_ARGS)),
+  };
+}
+
+/**
+ * Throws unless HEAD is origin/main, after a fetch, with nothing uncommitted under specs/. Runs
+ * started from a plan, in CI or in local worktrees, implement the specs as they are on main.
+ */
+export async function checkMainCheckout(exec: Exec, repoRoot: string): Promise<void> {
+  const sh = (command: string, args: string[]) => run(exec, command, args, repoRoot);
+  await sh("git", ["fetch", "origin", "main"]);
+  const [head, main] = [await sh("git", ["rev-parse", "HEAD"]), await sh("git", ["rev-parse", "origin/main"])];
+  if (head !== main) throw new Error(`Local HEAD is at ${head}, but origin/main is at ${main}. Start from an up-to-date main.`);
+  const dirty = await sh("git", ["status", "--porcelain", "--", "specs/"]);
+  if (dirty) throw new Error(`Working tree is not clean under specs/; runs use the specs on main:
+${dirty}`);
+}
+
 export interface CoordinatorDeps {
   specs: readonly Spec[];
   exec: Exec;
@@ -218,22 +245,11 @@ const defaultSleep = (ms: number) => new Promise<void>((resolve) => setTimeout(r
 export async function runCoordinator(deps: CoordinatorDeps): Promise<CoordinatorResult> {
   const { specs, exec, repoRoot, dispatch = false, maxParallel, log, sleep = defaultSleep, runLog } = deps;
   if (!Number.isInteger(maxParallel) || maxParallel <= 0) throw new RangeError(`maxParallel must be a positive integer; got ${maxParallel}`);
-  const sh = (command: string, args: string[]) => run(exec, command, args, repoRoot);
 
   // The workflow implements each spec as it is on main, so the local plan must be made from main.
-  if (dispatch) {
-    await sh("git", ["fetch", "origin", "main"]);
-    const [head, main] = [await sh("git", ["rev-parse", "HEAD"]), await sh("git", ["rev-parse", "origin/main"])];
-    if (head !== main) throw new Error(`Local HEAD is at ${head}, but origin/main is at ${main}. Dispatch from an up-to-date main.`);
-    const dirty = await sh("git", ["status", "--porcelain", "--", "specs/"]);
-    if (dirty) throw new Error(`Working tree is not clean under specs/; the workflow uses the specs on main:\n${dirty}`);
-  }
+  if (dispatch) await checkMainCheckout(exec, repoRoot);
 
-  const github: GithubState = {
-    pulls: parsePulls(await sh("gh", PULLS_ARGS)),
-    branches: parseBranches(await sh("git", BRANCHES_ARGS)),
-    runs: parseRuns(await sh("gh", RUNS_ARGS)),
-  };
+  const github = await readGithubState(exec, repoRoot);
   const plan = planSpecs(specs, github);
   for (const planned of plan) log(formatPlanned(planned));
   runLog?.event({ type: "plan.result", plan });
@@ -248,7 +264,7 @@ export async function runCoordinator(deps: CoordinatorDeps): Promise<Coordinator
 
   for (const { path } of plan.filter((p) => p.state.status === "ready").slice(0, maxParallel)) {
     try {
-      await sh("gh", ["workflow", "run", WORKFLOW, "--ref", "main", "-f", `spec=${path}`]);
+      await run(exec, "gh", ["workflow", "run", WORKFLOW, "--ref", "main", "-f", `spec=${path}`], repoRoot);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       throw new Error(`Dispatching ${path} failed. Already dispatched: ${dispatched.join(", ") || "none"}.\n${message}`, { cause: error });
@@ -265,7 +281,7 @@ export async function runCoordinator(deps: CoordinatorDeps): Promise<Coordinator
   let missing = dispatched;
   for (let waited = 0; missing.length && waited < POLL_LIMIT_MS; waited += POLL_MS) {
     await sleep(POLL_MS);
-    const runs = parseRuns(await sh("gh", RUNS_ARGS));
+    const runs = parseRuns(await run(exec, "gh", RUNS_ARGS, repoRoot));
     missing = missing.filter((path) => !runs.some((r) => r.title === runTitle(path) && !known.has(r.id)));
   }
   if (missing.length) {

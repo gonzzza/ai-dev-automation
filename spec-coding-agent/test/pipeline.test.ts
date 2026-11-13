@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { AgentRun } from "../src/agent.js";
-import { runPipeline, type GitOps, type PipelineDeps } from "../src/pipeline.js";
+import { ClaimLostError, exitCodeFor, runPipeline, type GitOps, type PipelineDeps } from "../src/pipeline.js";
 import { classifyFailure } from "../src/runlog.js";
 import { parseSpec } from "../src/spec.js";
 
@@ -33,6 +33,9 @@ function setup({
   contents = {} as Record<string, string | undefined>,
   tamperGit = false,
   symlinks = [] as string[],
+  onBase = true,
+  claim = async (): Promise<unknown> => "",
+  onOrigin = async (): Promise<boolean> => false,
 } = {}) {
   let created = false;
   let ran = false;
@@ -41,7 +44,11 @@ function setup({
     currentBranch: vi.fn(async () => branch),
     changedFiles: vi.fn(async () => (created ? changed : dirty)),
     branchExists: vi.fn(async () => exists),
+    branchExistsOnOrigin: vi.fn(onOrigin),
     createBranch: vi.fn(async () => void (created = true)),
+    claimBranch: vi.fn(claim),
+    headSha: vi.fn(async () => "0123456789abcdef"),
+    headOnBase: vi.fn(async () => onBase),
     commit: vi.fn(async () => {}),
     push: vi.fn(async () => ""),
     openPullRequest: vi.fn(async (_title: string, _body: string, _base: string, _head: string) => "https://github.com/o/r/pull/2"),
@@ -200,6 +207,88 @@ describe("runPipeline", () => {
   });
 });
 
+describe("starting from a detached HEAD", () => {
+  it("AC1: accepts a detached HEAD on origin/<base>, or behind it, and branches as usual", async () => {
+    const { deps, git } = setup({ branch: "HEAD", onBase: true });
+    await expect(runPipeline(deps)).resolves.toMatchObject({ status: "opened" });
+    expect(git.headOnBase).toHaveBeenCalledWith("main");
+    expect(git.createBranch).toHaveBeenCalledWith("agent/001-rate-limiter");
+  });
+
+  it("AC1: refuses a detached HEAD that isn't on origin/<base>, naming its short SHA", async () => {
+    const { deps, git } = setup({ branch: "HEAD", onBase: false });
+    await expect(runPipeline(deps)).rejects.toThrow("Check out main, or detach on origin/main, first (currently detached at 0123456).");
+    expect(git.createBranch).not.toHaveBeenCalled();
+    expect(deps.runAgent).not.toHaveBeenCalled();
+  });
+
+  it("AC1: on a named branch, runs on base and refuses any other, without asking headOnBase", async () => {
+    const onBase = setup();
+    await expect(runPipeline(onBase.deps)).resolves.toMatchObject({ status: "opened" });
+    const other = setup({ branch: "feature" });
+    await expect(runPipeline(other.deps)).rejects.toThrow("Check out main first (currently on feature).");
+    expect(onBase.git.headOnBase).not.toHaveBeenCalled();
+    expect(other.git.headOnBase).not.toHaveBeenCalled();
+  });
+});
+
+describe("claiming the branch", () => {
+  const order = (fn: { mock: { invocationCallOrder: number[] } }) => fn.mock.invocationCallOrder[0]!;
+
+  it("AC2: claims after creating the branch and before the fingerprint and the agent", async () => {
+    const { deps, git } = setup();
+    await runPipeline(deps);
+    expect(git.claimBranch).toHaveBeenCalledWith("agent/001-rate-limiter");
+    expect(order(git.createBranch)).toBeLessThan(order(git.claimBranch));
+    expect(order(git.claimBranch)).toBeLessThan(order(git.fingerprint));
+    expect(order(git.claimBranch)).toBeLessThan(order(vi.mocked(deps.runAgent)));
+  });
+
+  it("AC2: a failed claim with the branch now on origin is a lost race: ClaimLostError, exit code 3, no agent", async () => {
+    const { deps, git } = setup({ claim: async () => Promise.reject(new Error("stale info")), onOrigin: async () => true });
+    const error = await runPipeline(deps).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ClaimLostError);
+    expect((error as Error).message).toBe("Another run already claimed specs/001-rate-limiter.md: agent/001-rate-limiter exists on origin.");
+    expect(exitCodeFor(error)).toBe(3);
+    expect(git.branchExistsOnOrigin).toHaveBeenCalledWith("agent/001-rate-limiter");
+    expect(deps.runAgent).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["the branch isn't on origin", async () => false],
+    ["origin can't be read", async () => Promise.reject(new Error("could not read from remote"))],
+  ])("AC2: rethrows the push's error unchanged when %s, and never runs the agent", async (_case, onOrigin) => {
+    const pushError = new Error("Permission denied (publickey)");
+    const { deps } = setup({ claim: async () => Promise.reject(pushError), onOrigin });
+    const error = await runPipeline(deps).catch((e: unknown) => e);
+    expect(error).toBe(pushError);
+    expect(error).not.toBeInstanceOf(ClaimLostError);
+    expect(exitCodeFor(error)).toBe(1);
+    expect(deps.runAgent).not.toHaveBeenCalled();
+  });
+
+  it("AC2: a branch that exists at preflight is the ordinary 'already exists' error, before any claim", async () => {
+    const { deps, git } = setup({ exists: true });
+    const error = await runPipeline(deps).catch((e: unknown) => e);
+    expect((error as Error).message).toMatch(/^Branch agent\/001-rate-limiter already exists/);
+    expect(error).not.toBeInstanceOf(ClaimLostError);
+    expect(git.claimBranch).not.toHaveBeenCalled();
+  });
+
+  it("AC2: exitCodeFor gives 1 for a plain Error and anything else", () => {
+    expect(exitCodeFor(new Error("x"))).toBe(1);
+    expect(exitCodeFor("x")).toBe(1);
+    expect(exitCodeFor(new ClaimLostError("specs/a.md", "agent/a"))).toBe(3);
+  });
+
+  it("AC2: a dry run never claims or pushes", async () => {
+    const { deps, git } = setup({ dryRun: true });
+    await runPipeline(deps);
+    expect(git.claimBranch).not.toHaveBeenCalled();
+    expect(git.push).not.toHaveBeenCalled();
+  });
+});
+
 describe("traceability", () => {
   it("puts the run id in a commit trailer and the PR footer", async () => {
     const { deps, git } = setup();
@@ -221,6 +310,8 @@ describe("traceability", () => {
     [{ branch: "feature/x" }, "preflight"],
     [{ dirty: ["README.md"] }, "preflight"],
     [{ exists: true }, "preflight"],
+    [{ branch: "HEAD", onBase: false }, "preflight"],
+    [{ claim: async () => Promise.reject(new Error("stale info")), onOrigin: async () => true }, "claim-lost"],
   ])("classifies the gate failure for %o as %s", async (options, category) => {
     const { deps } = setup(options);
     const error = await runPipeline(deps).then(

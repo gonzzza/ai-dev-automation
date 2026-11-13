@@ -109,14 +109,47 @@ export class Git {
   async branchExists(name: string): Promise<boolean> {
     const local = await this.exec("git", [...Git.SAFE, "rev-parse", "--verify", "--quiet", `refs/heads/${name}`], { cwd: this.cwd });
     if (local.code === 0) return true;
-    // ls-remote matches ref name suffixes, so compare exactly. A failure (no origin, offline) surfaces later at push.
+    // A failure (no origin, offline) surfaces later, at the claim push.
+    return this.branchExistsOnOrigin(name).catch(() => false);
+  }
+
+  /** Whether `origin` has the branch. Throws when ls-remote fails, so an unreachable origin is never "no branch". */
+  async branchExistsOnOrigin(name: string): Promise<boolean> {
+    // ls-remote matches ref name suffixes, so compare exactly.
     const ref = `refs/heads/${name}`;
-    const remote = await this.exec("git", [...Git.SAFE, "ls-remote", "--heads", "origin", ref], { cwd: this.cwd });
-    return remote.code === 0 && remote.stdout.split("\n").some((line) => line.split("\t")[1] === ref);
+    const out = await this.git("ls-remote", "--heads", "origin", ref);
+    return out.split("\n").some((line) => line.split("\t")[1]?.trim() === ref);
   }
 
   createBranch(name: string) {
     return this.git("switch", "-c", name);
+  }
+
+  /**
+   * Creates the branch on origin, or fails: never moves an existing one. The empty lease value means
+   * "must not exist yet", checked by the server, so of two racing runs only one creates it. But git
+   * skips the lease when origin already has the branch at the same commit, and reports success
+   * ("up to date"). Two runs claiming from the same base commit do exactly that, so the porcelain
+   * status must say the push created the branch (`*`).
+   */
+  async claimBranch(name: string): Promise<void> {
+    const args = ["push", "--porcelain", "--no-verify", `--force-with-lease=${name}:`, "origin", name];
+    const result = await this.exec("git", [...Git.SAFE, ...args], { cwd: this.cwd });
+    // --porcelain puts the per-ref status, "[rejected] (stale info)" included, on stdout.
+    const output = `${result.stdout}\n${result.stderr}`.trim();
+    if (result.code !== 0) throw new Error(`git ${args.join(" ")} failed (exit ${result.code}):\n${output}`);
+    const ref = `refs/heads/${name}`;
+    const status = result.stdout.split("\n").find((line) => line.split("\t")[1]?.endsWith(`:${ref}`));
+    if (!status?.startsWith("*\t")) throw new Error(`The claim push did not create ${name} on origin:\n${output}`);
+  }
+
+  /** Whether HEAD is origin/<base> or an ancestor of it. Throws if git can't tell (an unknown ref, say). */
+  async headOnBase(base: string): Promise<boolean> {
+    const args = ["merge-base", "--is-ancestor", "HEAD", `refs/remotes/origin/${base}`];
+    const result = await this.exec("git", [...Git.SAFE, ...args], { cwd: this.cwd });
+    if (result.code === 0) return true;
+    if (result.code === 1) return false;
+    throw new Error(`git ${args.join(" ")} failed (exit ${result.code}):\n${result.stderr || result.stdout}`);
   }
 
   /** Commits exactly `files`: the index is reset first, so nothing staged during the run rides along. */
@@ -126,8 +159,12 @@ export class Git {
     await withTempFile(message, (path) => this.git("commit", "--no-verify", "-F", path));
   }
 
+  /**
+   * No -u: upstream tracking keys go into the config that parallel worktrees share, which would change
+   * the git-state fingerprint of every other run in progress. gh pr create gets --head explicitly.
+   */
   push(branch: string) {
-    return this.git("push", "--no-verify", "-u", "origin", branch);
+    return this.git("push", "--no-verify", "origin", branch);
   }
 
   /** Opens the PR with gh and returns its URL. */
