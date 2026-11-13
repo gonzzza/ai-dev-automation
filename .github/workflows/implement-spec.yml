@@ -93,8 +93,15 @@ jobs:
           git config user.email "${id}+${login}@users.noreply.github.com"
           gh auth setup-git # the harness pushes through gh's credential helper, which reads GH_TOKEN
           # The org standards at this commit of main, which the review of the PR will also use.
+          # Exit code 3 means another run (local or CI) already claimed the spec: not a failure (spec 006).
+          code=0
           npm run agent -- "$SPEC" --model "$AGENT_MODEL" --log-dir "$RUNNER_TEMP/agent-logs" \
-            --sandbox docker --standards org-standards --standards-ref "$GITHUB_SHA" "${options[@]}"
+            --sandbox docker --standards org-standards --standards-ref "$GITHUB_SHA" "${options[@]}" || code=$?
+          if [ "$code" -eq 3 ]; then
+            echo "::notice::Another run already claimed $SPEC; nothing to do."
+            exit 0
+          fi
+          exit "$code"
       # The audit log: the transcript, every policy decision, and the outcome, redacted. Uploaded
       # even when the run fails, which is when it matters most.
       - name: Upload audit log
