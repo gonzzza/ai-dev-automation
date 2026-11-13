@@ -3,13 +3,19 @@ run-name: ${{ inputs.dispatch && 'Plan and dispatch spec runs' || 'Plan spec run
 
 # The coordinator (spec 005) works out from GitHub's state which specs are done, in progress,
 # waiting on a human, blocked by their depends_on, or ready, and writes that plan to the run's
-# summary. Every push to main plans, because a merge is what moves specs along. Only a person
-# dispatches: run this workflow by hand with "dispatch" checked to start one *Implement a spec*
-# run per ready spec. CI agent runs are limited to demo-app, and a spec that changes the harness
-# itself is coded in a session (/code-spec), so a merge never spends API money on its own.
+# summary. Every push to main plans, because a merge is what moves specs along. So does every
+# finished *Implement a spec* run, because a failed run, or one that opened its PR, changes a
+# spec's state without a push. Only a person dispatches: run this workflow by hand with
+# "dispatch" checked to start one *Implement a spec* run per ready spec. CI agent runs are
+# limited to demo-app, and a spec that changes the harness itself is coded in a session
+# (/code-spec), so neither a merge nor a finished run ever spends API money on its own.
 on:
   push:
     branches: [main]
+  # Runs on main with no inputs, so only the plan job runs: a finished run never dispatches more.
+  workflow_run:
+    workflows: ["Implement a spec"]
+    types: [completed]
   workflow_dispatch:
     inputs:
       dispatch:
