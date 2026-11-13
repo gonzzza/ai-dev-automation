@@ -29,11 +29,17 @@ The spec: $ARGUMENTS
 
 ## 1. Resolve the spec
 
+- Run `npm run spec:check`. If it fails, show the error and stop. The coordinator below refuses to plan invalid specs.
+- Ask the coordinator for every spec's state: `npm run -s agent -- --plan`. It only reads GitHub (no API spend, no key), and prints one line per spec: `done`, `in-progress`, `needs-human`, `blocked: waiting on …` or `ready` (rules: [`spec-coding-agent/README.md`](../../../spec-coding-agent/README.md#coordinator-specs-in-dependency-order)). If it fails (for example `gh` isn't signed in), say so and carry on without it. Step 2 still checks branches and PRs.
 - Match the argument against `specs/*.md` (skip `specs/README.md`): a number (`1`, `001`), a slug (`rate-limiter`), a title or a path.
-- If nothing was given, or the match is ambiguous, list the specs with their titles and ask which one.
+- If nothing was given, or the match is ambiguous, list the specs with their titles and plan states, `ready` ones first, and ask which one. Recommend the lowest-numbered `ready` spec. If none is `ready`, say what each open one is waiting on.
 - If no spec covers what the user describes, suggest `/write-spec` and stop. Both modes need a written spec.
+- Check the chosen spec's state before going on:
+  - `ready`: go on.
+  - `blocked: waiting on …`: the specs it lists in `depends_on` aren't merged, so `main` lacks the code it builds on. Say which ones, suggest coding the lowest of them first, and stop unless the user still wants this one.
+  - `done` or `in-progress`: a PR, branch or run already exists. Name it, and stop unless the user wants a rerun. Step 2 has the checks and fixes for that.
+  - `needs-human`: say why (reverted, closed, failed, no PR), point to the re-arm steps in the coordinator's README, and stop unless the user wants to go on.
 - Read the spec. Note which directories it touches. That decides the scope in step 3.
-- Run `npm run spec:check`. If it fails for this spec, show the error and stop.
 
 ## 2. Check the preconditions
 
@@ -97,6 +103,8 @@ gh workflow run "Implement a spec" --ref main -f spec=specs/<file>.md
 ```
 
 The workflow uses the spec as it is on `origin/main`, the scope `demo-app`, the org standards at that commit, and the Docker sandbox. It mints the App's token itself, so nothing here needs a key.
+
+To start every `ready` spec at once instead, the *Plan spec runs* workflow does it: `gh workflow run "Plan spec runs" --ref main -f dispatch=true`. Offer that only when every `ready` spec fits the CI scope (`demo-app`), since it dispatches all of them, up to its *max-parallel*, and each run spends API money.
 
 Then:
 
