@@ -26,6 +26,12 @@ permissions: {}
 env:
   GH_REPO: ${{ github.repository }}
 
+# An explicit shell: bash runs steps with -eo pipefail. Without it GitHub uses bash -e, and a step
+# that pipes the coordinator into tee would pass when the coordinator fails.
+defaults:
+  run:
+    shell: bash
+
 jobs:
   plan:
     if: github.ref == 'refs/heads/main' && !inputs.dispatch
@@ -45,18 +51,22 @@ jobs:
           cache: npm
       - run: npm ci
       - name: Plan
+        id: plan
         env:
           GH_TOKEN: ${{ github.token }}
         run: npm run -s agent -- --plan 2>&1 | tee "$RUNNER_TEMP/plan.txt"
       - name: Summary
         if: always()
+        env:
+          OUTCOME: ${{ steps.plan.outcome }}
         run: |
           {
             echo '## Spec plan'
+            if [ "$OUTCOME" != success ]; then echo "**The plan failed ($OUTCOME).** Its output, if any:"; fi
             echo '```'
-            cat "$RUNNER_TEMP/plan.txt" 2>/dev/null || echo "The plan failed. See the Plan step's log."
+            cat "$RUNNER_TEMP/plan.txt" 2>/dev/null || true
             echo '```'
-            echo 'To start runs for the ready specs, run this workflow by hand with *dispatch* checked.'
+            if [ "$OUTCOME" = success ]; then echo 'To start runs for the ready specs, run this workflow by hand with *dispatch* checked.'; fi
           } >> "$GITHUB_STEP_SUMMARY"
 
   dispatch:
@@ -85,16 +95,20 @@ jobs:
       # the exception, so the Implement a spec runs start as usual and mint the agent App's token.
       # The coordinator stops unless this checkout is still the tip of main.
       - name: Plan and dispatch
+        id: plan
         env:
           GH_TOKEN: ${{ github.token }}
           MAX_PARALLEL: ${{ inputs.max-parallel }}
         run: npm run -s agent -- --plan --dispatch --max-parallel "$MAX_PARALLEL" 2>&1 | tee "$RUNNER_TEMP/plan.txt"
       - name: Summary
         if: always()
+        env:
+          OUTCOME: ${{ steps.plan.outcome }}
         run: |
           {
             echo '## Spec plan and dispatch'
+            if [ "$OUTCOME" != success ]; then echo "**Planning or dispatching failed ($OUTCOME).** Any specs already started are named in the output:"; fi
             echo '```'
-            cat "$RUNNER_TEMP/plan.txt" 2>/dev/null || echo "The plan failed. See the Plan and dispatch step's log."
+            cat "$RUNNER_TEMP/plan.txt" 2>/dev/null || true
             echo '```'
           } >> "$GITHUB_STEP_SUMMARY"
