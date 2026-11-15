@@ -8,8 +8,9 @@ import type { RunLog } from "./runlog.js";
 import { padSpecNumber, type Spec } from "./spec.js";
 
 // A local wave runs the coordinator's plan on this machine: one git worktree per ready spec, one
-// agent run per worktree, all at once. Each run claims its spec on origin before its agent starts,
-// so local and CI coordinators can run side by side. A failed run keeps its worktree as the record.
+// headless Claude Code session per worktree (a --session run, on the user's subscription), all at
+// once. Each run claims its spec on origin before the session starts, so local and CI coordinators
+// can run side by side. A failed run keeps its worktree as the record.
 
 /**
  * Marks specs whose worktree a previous wave kept (its run failed) as `needs-human` /
@@ -199,7 +200,7 @@ async function wave(deps: LocalWaveDeps, git: (args: string[]) => Promise<string
     runLog?.event({ type: "local.start", spec: spec.path, worktree });
     log(`${prefix}Started in ${worktree}`);
     const exitCode = await deps
-      .spawnAgent([spec.path, ...deps.agentArgs], { cwd: worktree, env: { ...deps.env, INIT_CWD: worktree }, onLine: (line) => log(`${prefix}${line}`) })
+      .spawnAgent([spec.path, "--session", ...deps.agentArgs], { cwd: worktree, env: { ...deps.env, INIT_CWD: worktree }, onLine: (line) => log(`${prefix}${line}`) })
       .catch((error: unknown) => {
         log(`${prefix}Could not run: ${error instanceof Error ? error.message : String(error)}`);
         return 1;
@@ -213,8 +214,8 @@ async function wave(deps: LocalWaveDeps, git: (args: string[]) => Promise<string
       result.lostClaim.push(spec.path);
       log(`${prefix}Another run claimed it first; removing ${worktree}.`);
       await removeWorktree(git, worktree, log, true);
-      await git(["branch", "-D", `agent/${spec.slug}`]).catch((error: unknown) =>
-        log(`⚠️ Could not delete the local branch agent/${spec.slug}: ${error instanceof Error ? error.message : String(error)}`),
+      await git(["branch", "-D", `spec/${spec.slug}`]).catch((error: unknown) =>
+        log(`⚠️ Could not delete the local branch spec/${spec.slug}: ${error instanceof Error ? error.message : String(error)}`),
       );
     } else {
       result.failed.push({ spec: spec.path, worktree, exitCode });

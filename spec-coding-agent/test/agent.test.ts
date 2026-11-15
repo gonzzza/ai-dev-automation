@@ -9,6 +9,7 @@ import {
   buildPrompt,
   describeMessage,
   loadPromptTemplate,
+  TOOLS_TEXT,
   type AgentConfig,
 } from "../src/agent.js";
 import type { Exec } from "../src/exec.js";
@@ -28,6 +29,17 @@ describe("buildPrompt", () => {
     expect(prompt).toContain("Do not commit");
     expect(prompt).not.toMatch(/\{\{\w+\}\}/);
     expect(prompt.endsWith("</spec>")).toBe(true);
+  });
+
+  it("AC8: fills the tools rule for agent runs and for session runs", async () => {
+    const template = await loadPromptTemplate();
+    const agent = buildPrompt(template, spec, ["demo-app"]);
+    const session = buildPrompt(template, spec, ["demo-app"], undefined, "session");
+    expect(agent).toContain(`- ${TOOLS_TEXT.agent}`);
+    expect(agent).not.toContain(TOOLS_TEXT.session);
+    expect(session).toContain(`- ${TOOLS_TEXT.session}`);
+    expect(session).not.toContain("run_checks");
+    expect(session).not.toMatch(/\{\{\w+\}\}/);
   });
 
   it("does not expand placeholder-like text or $ patterns inside the spec", () => {

@@ -35,7 +35,7 @@ function setup({
   symlinks = [] as string[],
   onBase = true,
   claim = async (): Promise<unknown> => "",
-  onOrigin = async (): Promise<boolean> => false,
+  onOrigin = async (_name?: string): Promise<boolean> => false,
 } = {}) {
   let created = false;
   let ran = false;
@@ -43,7 +43,7 @@ function setup({
     fingerprint: vi.fn(async () => (tamperGit && ran ? "changed" : "original")),
     currentBranch: vi.fn(async () => branch),
     changedFiles: vi.fn(async () => (created ? changed : dirty)),
-    branchExists: vi.fn(async () => exists),
+    branchExists: vi.fn(async (_name: string) => exists),
     branchExistsOnOrigin: vi.fn(onOrigin),
     createBranch: vi.fn(async () => void (created = true)),
     claimBranch: vi.fn(claim),
@@ -265,6 +265,39 @@ describe("claiming the branch", () => {
     expect(error).not.toBeInstanceOf(ClaimLostError);
     expect(exitCodeFor(error)).toBe(1);
     expect(deps.runAgent).not.toHaveBeenCalled();
+  });
+
+  it("AC2: a claim followed by the spec's other branch name on origin is a lost race with a run of the other kind", async () => {
+    const { deps, git } = setup({ onOrigin: async (name?: string) => name === "spec/001-rate-limiter" });
+    const error = await runPipeline(deps).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(ClaimLostError);
+    expect((error as Error).message).toBe("Another run already claimed specs/001-rate-limiter.md: spec/001-rate-limiter exists on origin.");
+    expect(git.claimBranch).toHaveBeenCalledWith("agent/001-rate-limiter");
+    expect(deps.runAgent).not.toHaveBeenCalled();
+  });
+
+  it("AC2: checks both branch names at preflight", async () => {
+    const { deps, git } = setup();
+    await runPipeline(deps);
+    expect(git.branchExists.mock.calls.map(([name]) => name)).toEqual(["agent/001-rate-limiter", "spec/001-rate-limiter"]);
+    const taken = setup();
+    taken.git.branchExists.mockImplementation(async (name: string) => name === "spec/001-rate-limiter");
+    await expect(runPipeline(taken.deps)).rejects.toThrow(/^Branch spec\/001-rate-limiter already exists/);
+    expect(taken.git.claimBranch).not.toHaveBeenCalled();
+  });
+
+  it("AC8: a session run claims and pushes spec/<slug>, checks agent/<slug>, and says so in the commit and PR", async () => {
+    const { deps, git } = setup();
+    deps.kind = "session";
+    await runPipeline(deps);
+    expect(git.createBranch).toHaveBeenCalledWith("spec/001-rate-limiter");
+    expect(git.claimBranch).toHaveBeenCalledWith("spec/001-rate-limiter");
+    expect(git.branchExistsOnOrigin).toHaveBeenCalledWith("agent/001-rate-limiter");
+    expect(git.push).toHaveBeenCalledWith("spec/001-rate-limiter");
+    expect(git.commit).toHaveBeenCalledWith(expect.any(Array), expect.stringContaining("in a headless Claude Code session."));
+    const [, body, , head] = git.openPullRequest.mock.calls[0]!;
+    expect(head).toBe("spec/001-rate-limiter");
+    expect(body).toMatch(/^> Implemented in a headless Claude Code session from /);
   });
 
   it("AC2: a branch that exists at preflight is the ordinary 'already exists' error, before any claim", async () => {

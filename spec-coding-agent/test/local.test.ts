@@ -185,7 +185,7 @@ describe("runLocalWave", () => {
       worktreeDir: dir,
       maxParallel: 2,
       agentArgs: ["--scope", "demo-app", "--log-dir", "/abs/runs"],
-      env: { PATH: "/bin", ANTHROPIC_API_KEY: "k" },
+      env: { PATH: "/bin", HOME: "/home/me" },
       log: () => {},
       ...over,
       spawnAgent: vi.fn<SpawnAgent>(async () => 0),
@@ -260,8 +260,8 @@ describe("runLocalWave", () => {
     expect(prepareSandbox).toHaveBeenCalledOnce();
     expect(prepareSandbox.mock.invocationCallOrder[0]).toBeLessThan(d.spawnAgent.mock.invocationCallOrder[0]!);
     expect(d.spawnAgent.mock.calls.map(([args, options]) => [args, options.cwd, options.env])).toEqual([
-      [["specs/001-a.md", "--scope", "demo-app", "--log-dir", "/abs/runs"], wt("001-a"), { PATH: "/bin", ANTHROPIC_API_KEY: "k", INIT_CWD: wt("001-a") }],
-      [["specs/002-b.md", "--scope", "demo-app", "--log-dir", "/abs/runs"], wt("002-b"), { PATH: "/bin", ANTHROPIC_API_KEY: "k", INIT_CWD: wt("002-b") }],
+      [["specs/001-a.md", "--session", "--scope", "demo-app", "--log-dir", "/abs/runs"], wt("001-a"), { PATH: "/bin", HOME: "/home/me", INIT_CWD: wt("001-a") }],
+      [["specs/002-b.md", "--session", "--scope", "demo-app", "--log-dir", "/abs/runs"], wt("002-b"), { PATH: "/bin", HOME: "/home/me", INIT_CWD: wt("002-b") }],
     ]);
     expect(result.started).toEqual(["specs/001-a.md", "specs/002-b.md"]);
     expect(result.succeeded).toEqual(["specs/001-a.md", "specs/002-b.md"]);
@@ -287,7 +287,7 @@ describe("runLocalWave", () => {
     const exits: Record<string, number> = { "specs/001-a.md": 0, "specs/002-b.md": 1, "specs/003-c.md": 3 };
     const d = deps({ exec, maxParallel: 3, log: (l) => logged.push(l), runLog });
     d.spawnAgent.mockImplementation(async ([path], { onLine }) => {
-      onLine(`Created agent/${path!.slice(6, -3)}`);
+      onLine(`Created spec/${path!.slice(6, -3)}`);
       return exits[path!]!;
     });
     const result = await runLocalWave(d);
@@ -298,9 +298,9 @@ describe("runLocalWave", () => {
     expect(lines().filter((l) => /^git (worktree remove|branch -D)/.test(l))).toEqual([
       `git worktree remove ${wt("001-a")}`,
       `git worktree remove --force ${wt("003-c")}`,
-      "git branch -D agent/003-c",
+      "git branch -D spec/003-c",
     ]);
-    expect(logged).toEqual(expect.arrayContaining(["[001] Created agent/001-a", "[002] Created agent/002-b", "[003] Created agent/003-c"]));
+    expect(logged).toEqual(expect.arrayContaining(["[001] Created spec/001-a", "[002] Created spec/002-b", "[003] Created spec/003-c"]));
     expect(logged.some((l) => l.includes(wt("002-b")) && l.includes("Kept"))).toBe(true);
     // Runs end in any order, so compare sorted by event type, then spec.
     const local = runLog.events.filter((e) => e.type.startsWith("local."));

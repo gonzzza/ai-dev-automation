@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import type { AgentRun } from "../src/agent.js";
-import { commitMessage, prBody, prTitle, UNFILLED_SECTION, type PrContext } from "../src/pr.js";
+import { branchName, branchNames, commitMessage, prBody, prTitle, UNFILLED_SECTION, type PrContext } from "../src/pr.js";
 import { parseSpec, type Spec } from "../src/spec.js";
 import type { PrTemplate } from "../src/template.js";
 
@@ -223,5 +223,23 @@ describe("prBody with a PR template", () => {
   it("AC5: without a template, ignores the report's sections and equals the body from before this change", () => {
     const withSections = { ...context, run: { ...run, report: { ...run.report, sections: [{ heading: "What", text: "x" }] } } };
     expect(prBody(withSections)).toBe(BODY_BEFORE);
+  });
+});
+
+describe("session runs", () => {
+  it("AC8: work on spec/<slug>, and a spec has both branch names", () => {
+    expect(branchName(spec)).toBe("agent/001-rate-limiter");
+    expect(branchName(spec, "session")).toBe("spec/001-rate-limiter");
+    expect(branchNames(spec)).toEqual(["agent/001-rate-limiter", "spec/001-rate-limiter"]);
+  });
+
+  it("AC8: say a headless Claude Code session wrote the code, and label the cost as an estimate", () => {
+    expect(commitMessage(spec, run, "r1", "session")).toMatch(/^SPEC-001 Add a token bucket rate limiter\n\nImplements specs\/001-rate-limiter\.md in a headless Claude Code session\.\n/);
+    const body = prBody({ ...context, kind: "session", repoUrl: "https://github.com/o/r" });
+    expect(body.split("\n\n")[0]).toBe(
+      "> Implemented in a headless Claude Code session from [`specs/001-rate-limiter.md`](https://github.com/o/r/blob/main/specs/001-rate-limiter.md). A human reviews and merges.",
+    );
+    expect(body).toContain("<sub>claude-opus-5-5 · 18 turns · 95s · $1.23 est. · run r1</sub>");
+    expect(prBody(context)).toBe(BODY_BEFORE);
   });
 });

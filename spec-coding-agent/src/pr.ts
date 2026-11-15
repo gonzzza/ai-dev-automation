@@ -2,19 +2,32 @@ import type { AgentRun } from "./agent.js";
 import type { Spec } from "./spec.js";
 import { sameHeading, scanMarkdown, type PrTemplate } from "./template.js";
 
-export const branchName = (spec: Spec): string => `agent/${spec.slug}`;
+/** Who writes the code: the Agent SDK harness (API), or a headless Claude Code session (`--session`). */
+export type RunKind = "agent" | "session";
+
+/** `agent/<slug>` for agent runs; `spec/<slug>` for code a Claude Code session wrote. */
+export const branchName = (spec: Spec, kind: RunKind = "agent"): string => `${kind === "session" ? "spec" : "agent"}/${spec.slug}`;
+
+/** Both names a spec's branch can have. A run of either kind holds both. */
+export const branchNames = (spec: Spec): [string, string] => [branchName(spec, "agent"), branchName(spec, "session")];
 
 /** Trailer that ties a commit to the run, and its audit log, that produced it. */
 export const RUN_TRAILER = "Agent-Run";
 
-export function commitMessage(spec: Spec, run: AgentRun, runId?: string): string {
+export function commitMessage(spec: Spec, run: AgentRun, runId?: string, kind: RunKind = "agent"): string {
   const trailer = runId ? `\n${RUN_TRAILER}: ${runId}\n` : "";
-  return `${prTitle(spec)}\n\nImplements ${spec.path}.\n\n${run.report.summary}\n${trailer}`;
+  const how = kind === "session" ? " in a headless Claude Code session" : "";
+  return `${prTitle(spec)}\n\nImplements ${spec.path}${how}.\n\n${run.report.summary}\n${trailer}`;
 }
 
 /** The footer line shared by the PR body and the fix-cycle comments. */
-export function runFooter(model: string, run: AgentRun<unknown>, { runId, runLink }: { runId?: string; runLink?: string } = {}): string {
-  const parts = [model, `${run.turns} turns`, `${Math.round(run.durationMs / 1000)}s`, `$${run.costUsd.toFixed(2)}`];
+export function runFooter(
+  model: string,
+  run: AgentRun<unknown>,
+  { runId, runLink, estimated = false }: { runId?: string; runLink?: string; estimated?: boolean } = {},
+): string {
+  // A session's cost is Claude Code's list-price estimate, whatever the account is billed.
+  const parts = [model, `${run.turns} turns`, `${Math.round(run.durationMs / 1000)}s`, `$${run.costUsd.toFixed(2)}${estimated ? " est." : ""}`];
   if (runId) parts.push(runLink ? `run [${runId}](${runLink})` : `run ${runId}`);
   return `<sub>${parts.join(" · ")}</sub>`;
 }
@@ -49,6 +62,8 @@ export interface PrContext {
   standards?: PrStandards;
   /** The repo's PR template, from the base checkout. Its sections replace Summary and Testing. */
   template?: PrTemplate;
+  /** Default "agent". */
+  kind?: RunKind;
 }
 
 export interface PrStandards {
@@ -93,13 +108,15 @@ function templateSections(template: PrTemplate, entries: AgentRun["report"]["sec
   });
 }
 
-export function prBody({ spec, run, files, model, base, repoUrl, runId, standards, template }: PrContext): string {
+export function prBody({ spec, run, files, model, base, repoUrl, runId, standards, template, kind = "agent" }: PrContext): string {
   const { report } = run;
   const link = (text: string, path: string, kind: "blob" | "tree") =>
     repoUrl ? `[${text}](${repoUrl}/${kind}/${base}/${path})` : text;
+  const specLink = link(`\`${spec.path}\``, spec.path, "blob");
   const opening =
-    `> 🤖 Opened by the ${link("spec-driven agent", "spec-coding-agent", "tree")} from ${link(`\`${spec.path}\``, spec.path, "blob")}. ` +
-    "A human reviews and merges.";
+    kind === "session"
+      ? `> Implemented in a headless Claude Code session from ${specLink}. A human reviews and merges.`
+      : `> 🤖 Opened by the ${link("spec-driven agent", "spec-coding-agent", "tree")} from ${specLink}. A human reviews and merges.`;
   const plan = ["## Plan", report.plan.map((step, i) => `${i + 1}. ${step}`).join("\n")];
   // With a template, its sections replace Summary and Testing, and the harness line gets its own heading.
   const sections = template
@@ -110,7 +127,7 @@ export function prBody({ spec, run, files, model, base, repoUrl, runId, standard
   sections.push(
     "## Files changed",
     files.map((f) => `- \`${f}\``).join("\n"),
-    runFooter(model, run, { runId }),
+    runFooter(model, run, { runId, estimated: kind === "session" }),
     "🤖 Generated with [Claude Code](https://claude.com/claude-code)",
   );
   return sections.join("\n\n");

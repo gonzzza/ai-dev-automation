@@ -24,16 +24,25 @@ export interface ModeFlags {
   maxParallel: boolean;
   local: boolean;
   worktreeDir: boolean;
+  session: boolean;
+  /** Given explicitly, not by default. */
+  maxTurns: boolean;
+  maxMinutes: boolean;
 }
 
 /**
  * The usage error for a combination of mode flags, or undefined when it is valid. A spec run takes
  * one spec path; --fix-pr takes none; --plan takes none and none of the options that only make
  * sense for one spec; --dispatch, --max-parallel and --local only work with --plan; --local can't
- * dispatch, and --worktree-dir only works with --local.
+ * dispatch, and --worktree-dir only works with --local. --session is a spec run's option (a wave
+ * passes it to its runs itself); sessions have a time limit, not a turn limit.
  */
 export function usageErrorOf(flags: ModeFlags): string | undefined {
   if (flags.worktreeDir && !flags.local) return "--worktree-dir only works with --local.";
+  if (flags.session && flags.plan) return "--session can't be combined with --plan; --plan --local runs sessions already.";
+  if (flags.session && flags.fixPr) return "--session can't be combined with --fix-pr.";
+  if (flags.maxTurns && (flags.session || flags.local)) return "--max-turns doesn't apply to Claude Code sessions; use --max-minutes.";
+  if (flags.maxMinutes && !flags.session && !flags.local) return "--max-minutes only works with --session or --local.";
   if (flags.plan) {
     const extra = [
       flags.positionals ? "a spec path" : "",
@@ -63,7 +72,7 @@ export interface WaveOptions {
   scope: string[];
   model: string;
   effort: string;
-  "max-turns": string;
+  "max-minutes": string;
   "max-budget": string;
   sandbox: string;
   "sandbox-image": string;
@@ -86,7 +95,7 @@ export function waveAgentArgs(options: WaveOptions): string[] {
   };
   return [
     ...options.scope.flatMap((dir) => ["--scope", dir]),
-    ...(["model", "effort", "max-turns", "max-budget", "sandbox", "sandbox-image"] as const).flatMap(flag),
+    ...(["model", "effort", "max-minutes", "max-budget", "sandbox", "sandbox-image"] as const).flatMap(flag),
     ...(["standards", "standards-packs", "standards-ref", "max-standards-chars", "log-dir"] as const).flatMap(flag),
   ];
 }
