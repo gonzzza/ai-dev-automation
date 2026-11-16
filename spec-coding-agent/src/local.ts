@@ -65,7 +65,7 @@ export type SpawnAgent = (args: string[], options: SpawnOptions) => Promise<numb
  * closing quote are doubled, or the program's argument parser would read `\"` as a literal quote.
  */
 export function cmdArg(arg: string): string {
-  if (/["%!\r\n]/.test(arg)) throw new Error(`Can't pass ${JSON.stringify(arg)} to npm safely on Windows.`);
+  if (/["%!\r\n]/.test(arg)) throw new RangeError(`arg must not contain ", %, ! or a line break to pass through npm on Windows; got ${JSON.stringify(arg)}`);
   if (/^[\w\-.,:\\/=@+]+$/.test(arg)) return arg;
   return `"${arg.replace(/(\\+)$/, "$1$1")}"`;
 }

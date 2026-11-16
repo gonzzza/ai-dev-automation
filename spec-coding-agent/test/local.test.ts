@@ -91,7 +91,7 @@ describe("cmdArg", () => {
   });
 
   it.each(['say "hi"', "%PATH%", "wow!", "a\nb", "a\rb"])("AC7: refuses %j, which cmd would expand or split", (arg) => {
-    expect(() => cmdArg(arg)).toThrow(/Can't pass .* to npm safely on Windows/);
+    expect(() => cmdArg(arg)).toThrow(new RangeError(`arg must not contain ", %, ! or a line break to pass through npm on Windows; got ${JSON.stringify(arg)}`));
   });
 });
 
