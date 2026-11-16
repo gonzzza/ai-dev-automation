@@ -116,5 +116,9 @@ export const spawnSession: SessionSpawn = (command, args, { cwd, env, input, tim
       const code = error ? (typeof error.code === "number" ? error.code : 1) : 0;
       resolve({ code, stdout: String(stdout), stderr: String(stderr), timedOut });
     });
+    // A child that exits before reading the whole prompt (not signed in, a bad flag, not installed)
+    // breaks the pipe. That write error is expected, and the execFile callback reports the real
+    // failure; unhandled, it would crash the harness before run.end is logged.
+    child.stdin?.on("error", () => {});
     child.stdin?.end(input);
   });

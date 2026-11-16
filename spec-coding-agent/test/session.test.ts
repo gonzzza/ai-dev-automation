@@ -2,7 +2,8 @@ import { describe, expect, it, vi } from "vitest";
 import { AGENT_REPORT_JSON_SCHEMA, AgentReportSchema, type AgentReport, type AgentTask } from "../src/agent.js";
 import type { RunEvent, RunLog } from "../src/runlog.js";
 import { classifyFailure } from "../src/runlog.js";
-import { runSession, sessionEnv, type SessionConfig, type SessionResult, type SessionSpawn } from "../src/session.js";
+import { tmpdir } from "node:os";
+import { runSession, sessionEnv, spawnSession, type SessionConfig, type SessionResult, type SessionSpawn } from "../src/session.js";
 
 const report: AgentReport = { plan: ["Read the code", "Write it"], summary: "Adds x.", testing: "Unit tests.", checksPassed: true, notes: "", sections: [] };
 const task: AgentTask<AgentReport> = { prompt: "Implement the spec.", schema: AgentReportSchema };
@@ -96,5 +97,31 @@ describe("runSession", () => {
     const error = (await runSession(task, config, answer({ json })).catch((e: unknown) => e)) as Error;
     expect(error.message).toMatch(/^Agent report did not match the schema: /);
     expect(classifyFailure(error.message)).toBe("bad-report");
+  });
+});
+
+// The real spawn, against node children: offline and fast.
+describe("spawnSession", () => {
+  const node = (script: string) => ["-e", script];
+  const options = (input: string, timeoutMs = 30_000) => ({ cwd: tmpdir(), env: process.env, input, timeoutMs });
+
+  it("AC8: writes the prompt to the child's stdin and collects its output and exit code", async () => {
+    const echo = "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{process.stdout.write(s.toUpperCase());process.exitCode=3;})";
+    expect(await spawnSession(process.execPath, node(echo), options("the prompt"))).toEqual({ code: 3, stdout: "THE PROMPT", stderr: "", timedOut: false });
+  });
+
+  it("AC8: reports a child that exits before reading a large prompt as a failure, instead of crashing on the broken pipe", async () => {
+    const result = await spawnSession(process.execPath, node("process.stderr.write('Not logged in');process.exit(1)"), options("x".repeat(8 * 1024 * 1024)));
+    expect(result).toMatchObject({ code: 1, stderr: "Not logged in", timedOut: false });
+  });
+
+  it("AC8: reports a command that can't start as a failure", async () => {
+    const result = await spawnSession("no-such-command-for-the-session-test", [], options("p"));
+    expect(result).toMatchObject({ code: 1, timedOut: false });
+  });
+
+  it("AC8: kills a session that runs past its time limit and reports the timeout", async () => {
+    const result = await spawnSession(process.execPath, node("setInterval(()=>{},1000)"), options("p", 500));
+    expect(result.timedOut).toBe(true);
   });
 });
