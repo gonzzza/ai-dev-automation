@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { basename, dirname, join, relative, resolve } from "node:path";
 import { parseArgs, parseEnv } from "node:util";
 import { runAgent, specTask, type AgentConfig } from "./agent.js";
-import { parseLimit, scopeDir, usageErrorOf, waveAgentArgs } from "./args.js";
+import { parseLimit, parseMaxMinutes, scopeDir, usageErrorOf, waveAgentArgs } from "./args.js";
 import { assertSandboxAvailable, DEFAULT_SANDBOX_IMAGE, prepareSandbox, runChecks, type Sandbox } from "./checks.js";
 import { runCoordinator } from "./coordinate.js";
 import { exec, run } from "./exec.js";
@@ -166,7 +166,7 @@ async function main(): Promise<void> {
         // Each run is a --session run with its own limits, on Claude Code's signed-in account. Bad
         // options and a missing claude fail here, before any worktree exists.
         const maxMinutes = values["max-minutes"] ?? "60";
-        parseLimit("--max-minutes", maxMinutes, { integer: true });
+        parseMaxMinutes(maxMinutes);
         parseLimit("--max-budget", values["max-budget"]);
         await assertClaudeAvailable();
         const sandbox = sandboxOf(values.sandbox, values["sandbox-image"]);
@@ -331,7 +331,7 @@ async function main(): Promise<void> {
       return summary; // cost and turns come from the log's totals
     }
 
-    const maxMinutes = parseLimit("--max-minutes", values["max-minutes"] ?? "60", { integer: true });
+    const maxMinutes = parseMaxMinutes(values["max-minutes"] ?? "60");
     if (values.session) await assertClaudeAvailable();
     const specFile = resolve(userCwd, positionals[0]!);
     const spec = parseSpec(relative(repoRoot, specFile), await readFile(specFile, "utf8"));

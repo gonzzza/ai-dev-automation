@@ -76,7 +76,7 @@ describe("childExitCode", () => {
 });
 
 describe("cmdArg", () => {
-  it("leaves plain arguments alone and quotes ones with spaces or shell characters", () => {
+  it("AC7: leaves plain arguments alone and quotes ones with spaces or shell characters", () => {
     expect(cmdArg("--scope")).toBe("--scope");
     expect(cmdArg("C:\\Users\\me\\runs")).toBe("C:\\Users\\me\\runs");
     expect(cmdArg("C:\\Users\\Jo Smith\\runs")).toBe('"C:\\Users\\Jo Smith\\runs"');
@@ -84,13 +84,13 @@ describe("cmdArg", () => {
     expect(cmdArg("")).toBe('""');
   });
 
-  it("doubles trailing backslashes inside quotes, so they don't escape the closing quote", () => {
+  it("AC7: doubles trailing backslashes inside quotes, so they don't escape the closing quote", () => {
     expect(cmdArg("C:\\Jo Smith\\")).toBe('"C:\\Jo Smith\\\\"');
     expect(cmdArg("C:\\Jo Smith\\\\")).toBe('"C:\\Jo Smith\\\\\\\\"');
     expect(cmdArg("C:\\NoSpace\\")).toBe("C:\\NoSpace\\");
   });
 
-  it.each(['say "hi"', "%PATH%", "wow!", "a\nb", "a\rb"])("refuses %j, which cmd would expand or split", (arg) => {
+  it.each(['say "hi"', "%PATH%", "wow!", "a\nb", "a\rb"])("AC7: refuses %j, which cmd would expand or split", (arg) => {
     expect(() => cmdArg(arg)).toThrow(/Can't pass .* to npm safely on Windows/);
   });
 });
@@ -100,14 +100,14 @@ describe("spawnLines", () => {
   const script = (code: number) =>
     `process.stdout.write("out one\\nout two\\n"); process.stderr.write("err one\\n"); process.exitCode = ${code};`;
 
-  it.each([0, 3, 1])("streams stdout and stderr line by line and resolves to exit code %i", async (code) => {
+  it.each([0, 3, 1])("AC7: streams stdout and stderr line by line and resolves to exit code %i", async (code) => {
     const lines: string[] = [];
     const exit = await spawnLines(process.execPath, ["-e", script(code)], { cwd: tmpdir(), env: process.env, onLine: (l) => lines.push(l) });
     expect(exit).toBe(code);
     expect(lines.sort()).toEqual(["err one", "out one", "out two"]);
   });
 
-  it("passes cwd and env to the child", async () => {
+  it("AC7: passes cwd and env to the child", async () => {
     const lines: string[] = [];
     const cwd = realpathSync(tmpdir());
     await spawnLines(process.execPath, ["-e", "console.log(process.cwd()); console.log(process.env.WAVE_TEST)"], {
@@ -118,7 +118,7 @@ describe("spawnLines", () => {
     expect(lines.map((l) => l.toLowerCase())).toEqual([cwd.toLowerCase(), "from-the-wave"]);
   });
 
-  it("resolves to 1 and reports it when the command can't start", async () => {
+  it("AC7: resolves to 1 and reports it when the command can't start", async () => {
     const lines: string[] = [];
     const exit = await spawnLines(join(tmpdir(), "no-such-command-for-the-wave"), [], { cwd: tmpdir(), env: process.env, onLine: (l) => lines.push(l) });
     expect(exit).toBe(1);

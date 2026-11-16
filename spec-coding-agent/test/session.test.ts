@@ -3,7 +3,7 @@ import { AGENT_REPORT_JSON_SCHEMA, AgentReportSchema, type AgentReport, type Age
 import type { RunEvent, RunLog } from "../src/runlog.js";
 import { classifyFailure } from "../src/runlog.js";
 import { tmpdir } from "node:os";
-import { runSession, sessionEnv, spawnSession, type SessionConfig, type SessionResult, type SessionSpawn } from "../src/session.js";
+import { MAX_SESSION_MINUTES, runSession, sessionEnv, spawnSession, type SessionConfig, type SessionResult, type SessionSpawn } from "../src/session.js";
 
 const report: AgentReport = { plan: ["Read the code", "Write it"], summary: "Adds x.", testing: "Unit tests.", checksPassed: true, notes: "", sections: [] };
 const task: AgentTask<AgentReport> = { prompt: "Implement the spec.", schema: AgentReportSchema };
@@ -97,6 +97,26 @@ describe("runSession", () => {
     const error = (await runSession(task, config, answer({ json })).catch((e: unknown) => e)) as Error;
     expect(error.message).toMatch(/^Agent report did not match the schema: /);
     expect(classifyFailure(error.message)).toBe("bad-report");
+  });
+});
+
+describe("runSession limits", () => {
+  it.each([0, -1, 1.5, Number.NaN, MAX_SESSION_MINUTES + 1])("throws RangeError for maxMinutes %s, before starting claude", async (maxMinutes) => {
+    const spawn = answer({});
+    await expect(runSession(task, { ...config, maxMinutes }, spawn)).rejects.toThrow(new RangeError(`maxMinutes must be a positive integer up to ${MAX_SESSION_MINUTES}; got ${maxMinutes}`));
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it.each([0, -5, Number.NaN, Number.POSITIVE_INFINITY])("throws RangeError for maxBudgetUsd %s, before starting claude", async (maxBudgetUsd) => {
+    const spawn = answer({});
+    await expect(runSession(task, { ...config, maxBudgetUsd }, spawn)).rejects.toThrow(new RangeError(`maxBudgetUsd must be a positive number; got ${maxBudgetUsd}`));
+    expect(spawn).not.toHaveBeenCalled();
+  });
+
+  it("accepts the longest time limit Node's timers can hold", async () => {
+    const spawn = answer({});
+    await runSession(task, { ...config, maxMinutes: MAX_SESSION_MINUTES }, spawn);
+    expect(vi.mocked(spawn).mock.calls[0]![2].timeoutMs).toBeLessThanOrEqual(2 ** 31 - 1);
   });
 });
 

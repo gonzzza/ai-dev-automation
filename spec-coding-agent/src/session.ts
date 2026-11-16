@@ -79,8 +79,17 @@ interface ResultMessage {
   structured_output?: unknown;
 }
 
+/** Longest time limit Node's timers can hold (2^31 - 1 ms); a longer one fires at once. */
+export const MAX_SESSION_MINUTES = Math.floor((2 ** 31 - 1) / 60_000);
+
 /** Runs the task as a headless Claude Code session in the repo root and returns its validated report. */
 export async function runSession<Report>(task: AgentTask<Report>, config: SessionConfig, spawn: SessionSpawn = spawnSession): Promise<AgentRun<Report>> {
+  // Both are guardrails: execFile treats a non-positive or NaN timeout as no timeout at all.
+  const { maxMinutes, maxBudgetUsd } = config;
+  if (!Number.isInteger(maxMinutes) || maxMinutes <= 0 || maxMinutes > MAX_SESSION_MINUTES) {
+    throw new RangeError(`maxMinutes must be a positive integer up to ${MAX_SESSION_MINUTES}; got ${maxMinutes}`);
+  }
+  if (!Number.isFinite(maxBudgetUsd) || maxBudgetUsd <= 0) throw new RangeError(`maxBudgetUsd must be a positive number; got ${maxBudgetUsd}`);
   const args = sessionArgs(config);
   config.runLog?.event({ type: "session.start", command: ["claude", ...args], prompt: task.prompt });
   const timeoutMs = config.maxMinutes * 60_000;

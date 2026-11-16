@@ -1,5 +1,6 @@
 import { resolve } from "node:path";
 import { repoRelative } from "./policy.js";
+import { MAX_SESSION_MINUTES } from "./session.js";
 
 /**
  * Parses a CLI limit. Turn and budget caps are guardrails, so anything that isn't a finite
@@ -98,4 +99,14 @@ export function waveAgentArgs(options: WaveOptions): string[] {
     ...(["model", "effort", "max-minutes", "max-budget", "sandbox", "sandbox-image"] as const).flatMap(flag),
     ...(["standards", "standards-packs", "standards-ref", "max-standards-chars", "log-dir"] as const).flatMap(flag),
   ];
+}
+
+/**
+ * Parses --max-minutes. Checked by the CLI before any git work, so a value runSession would refuse
+ * never leaves a claimed branch behind.
+ */
+export function parseMaxMinutes(raw: string): number {
+  const minutes = parseLimit("--max-minutes", raw, { integer: true });
+  if (minutes > MAX_SESSION_MINUTES) throw new Error(`--max-minutes must be at most ${MAX_SESSION_MINUTES}, got "${raw}".`);
+  return minutes;
 }
