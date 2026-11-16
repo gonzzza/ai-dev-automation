@@ -101,19 +101,19 @@ describe("runSession", () => {
 });
 
 describe("runSession limits", () => {
-  it.each([0, -1, 1.5, Number.NaN, MAX_SESSION_MINUTES + 1])("throws RangeError for maxMinutes %s, before starting claude", async (maxMinutes) => {
+  it.each([0, -1, 1.5, Number.NaN, MAX_SESSION_MINUTES + 1])("AC8: throws RangeError for maxMinutes %s, before starting claude", async (maxMinutes) => {
     const spawn = answer({});
     await expect(runSession(task, { ...config, maxMinutes }, spawn)).rejects.toThrow(new RangeError(`maxMinutes must be a positive integer up to ${MAX_SESSION_MINUTES}; got ${maxMinutes}`));
     expect(spawn).not.toHaveBeenCalled();
   });
 
-  it.each([0, -5, Number.NaN, Number.POSITIVE_INFINITY])("throws RangeError for maxBudgetUsd %s, before starting claude", async (maxBudgetUsd) => {
+  it.each([0, -5, Number.NaN, Number.POSITIVE_INFINITY])("AC8: throws RangeError for maxBudgetUsd %s, before starting claude", async (maxBudgetUsd) => {
     const spawn = answer({});
     await expect(runSession(task, { ...config, maxBudgetUsd }, spawn)).rejects.toThrow(new RangeError(`maxBudgetUsd must be a positive number; got ${maxBudgetUsd}`));
     expect(spawn).not.toHaveBeenCalled();
   });
 
-  it("accepts the longest time limit Node's timers can hold", async () => {
+  it("AC8: accepts the longest time limit Node's timers can hold", async () => {
     const spawn = answer({});
     await runSession(task, { ...config, maxMinutes: MAX_SESSION_MINUTES }, spawn);
     expect(vi.mocked(spawn).mock.calls[0]![2].timeoutMs).toBeLessThanOrEqual(2 ** 31 - 1);

@@ -128,5 +128,17 @@ async function claim(git: GitOps, spec: Spec, branch: string, other: string): Pr
     if (await git.branchExistsOnOrigin(branch).catch(() => false)) throw new ClaimLostError(spec.path, branch);
     throw error;
   }
-  if (await git.branchExistsOnOrigin(other)) throw new ClaimLostError(spec.path, other);
+  // The claim is on origin now, so a failed check strands it: say which branch, and what to do.
+  let otherTaken: boolean;
+  try {
+    otherTaken = await git.branchExistsOnOrigin(other);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Claimed ${branch} on origin, but couldn't check whether ${other} exists there too, so the run stopped. ` +
+        `Delete ${branch} on origin once --plan shows the spec with no open PR and no run in flight, then run again.\n${message}`,
+      { cause: error },
+    );
+  }
+  if (otherTaken) throw new ClaimLostError(spec.path, other);
 }

@@ -276,6 +276,21 @@ describe("claiming the branch", () => {
     expect(deps.runAgent).not.toHaveBeenCalled();
   });
 
+  it("AC2: names the stranded claim when origin can't be read for the other branch name, and never runs the agent", async () => {
+    const offline = new Error("fatal: unable to access origin");
+    const { deps, git } = setup({ onOrigin: async (name?: string) => (name === "spec/001-rate-limiter" ? Promise.reject(offline) : false) });
+    const error = (await runPipeline(deps).catch((e: unknown) => e)) as Error;
+    expect(error).not.toBeInstanceOf(ClaimLostError);
+    expect(exitCodeFor(error)).toBe(1);
+    expect(error.message).toBe(
+      "Claimed agent/001-rate-limiter on origin, but couldn't check whether spec/001-rate-limiter exists there too, so the run stopped. " +
+        "Delete agent/001-rate-limiter on origin once --plan shows the spec with no open PR and no run in flight, then run again.\nfatal: unable to access origin",
+    );
+    expect(error.cause).toBe(offline);
+    expect(git.claimBranch).toHaveBeenCalledOnce();
+    expect(deps.runAgent).not.toHaveBeenCalled();
+  });
+
   it("AC2: checks both branch names at preflight", async () => {
     const { deps, git } = setup();
     await runPipeline(deps);
