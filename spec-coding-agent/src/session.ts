@@ -26,7 +26,12 @@ export interface SessionResult {
   stdout: string;
   stderr: string;
   timedOut: boolean;
+  /** Killed because its output passed the spawn's buffer limit. */
+  outputTooLarge?: boolean;
 }
+
+/** Most output a session may print; past it, execFile kills the session. */
+export const MAX_SESSION_OUTPUT_BYTES = 64 * 1024 * 1024;
 
 /** Starts `command` with `args`, writes `input` to its stdin, and collects its output. */
 export type SessionSpawn = (
@@ -99,6 +104,10 @@ export async function runSession<Report>(task: AgentTask<Report>, config: Sessio
     config.runLog?.event({ type: "session.end", timedOut: true, code: result.code });
     throw new Error(`Agent stopped without finishing: timed out after ${config.maxMinutes} minutes.`);
   }
+  if (result.outputTooLarge) {
+    config.runLog?.event({ type: "session.end", outputTooLarge: true, code: result.code });
+    throw new Error(`Agent stopped without finishing: claude printed more than ${MAX_SESSION_OUTPUT_BYTES / 1024 / 1024} MB of output.`);
+  }
   let message: ResultMessage;
   try {
     message = JSON.parse(result.stdout) as ResultMessage;
@@ -133,10 +142,13 @@ export type ExecFileFn = (
 export function createSpawnSession(run: ExecFileFn = execFile): SessionSpawn {
   return (command, args, { cwd, env, input, timeoutMs }) =>
     new Promise((resolve) => {
-      const child = run(command, args, { cwd, env, timeout: timeoutMs, killSignal: "SIGTERM", maxBuffer: 64 * 1024 * 1024 }, (error, stdout, stderr) => {
-        const timedOut = Boolean(error && "killed" in error && error.killed);
+      const options = { cwd, env, timeout: timeoutMs, killSignal: "SIGTERM" as const, maxBuffer: MAX_SESSION_OUTPUT_BYTES };
+      const child = run(command, args, options, (error, stdout, stderr) => {
+        // execFile sets `killed` both when its timer fires and when the output passes maxBuffer.
+        const outputTooLarge = (error?.code as unknown) === "ERR_CHILD_PROCESS_STDIO_MAXBUFFER";
+        const timedOut = Boolean(error?.killed) && !outputTooLarge;
         const code = error ? (typeof error.code === "number" ? error.code : 1) : 0;
-        resolve({ code, stdout: String(stdout), stderr: String(stderr), timedOut });
+        resolve({ code, stdout: String(stdout), stderr: String(stderr), timedOut, outputTooLarge });
       });
       // A child that exits before reading the whole prompt (not signed in, a bad flag, not installed)
       // breaks the pipe. That write error is expected, and the execFile callback reports the real

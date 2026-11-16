@@ -5,7 +5,7 @@ import { classifyFailure } from "../src/runlog.js";
 import type { ExecFileException } from "node:child_process";
 import { tmpdir } from "node:os";
 import { Writable } from "node:stream";
-import { createSpawnSession, MAX_SESSION_MINUTES, runSession, sessionEnv, spawnSession, type ExecFileFn, type SessionConfig, type SessionResult, type SessionSpawn } from "../src/session.js";
+import { createSpawnSession, MAX_SESSION_MINUTES, MAX_SESSION_OUTPUT_BYTES, runSession, sessionEnv, spawnSession, type ExecFileFn, type SessionConfig, type SessionResult, type SessionSpawn } from "../src/session.js";
 
 const report: AgentReport = { plan: ["Read the code", "Write it"], summary: "Adds x.", testing: "Unit tests.", checksPassed: true, notes: "", sections: [] };
 const task: AgentTask<AgentReport> = { prompt: "Implement the spec.", schema: AgentReportSchema };
@@ -87,6 +87,14 @@ describe("runSession", () => {
     expect(classifyFailure(error.message)).toBe("agent-stopped");
   });
 
+  it("AC8: throws the agent-stopped message naming the output cap when the session printed too much", async () => {
+    const runLog = memoryLog();
+    const error = (await runSession(task, { ...config, runLog }, answer({ outputTooLarge: true, code: 1, stdout: "partial" })).catch((e: unknown) => e)) as Error;
+    expect(error.message).toBe("Agent stopped without finishing: claude printed more than 64 MB of output.");
+    expect(classifyFailure(error.message)).toBe("agent-stopped");
+    expect(runLog.events.at(-1)).toEqual({ type: "session.end", outputTooLarge: true, code: 1 });
+  });
+
   it("AC8: throws the agent-stopped message when claude prints no JSON, with its error output", async () => {
     const error = (await runSession(task, config, answer({ code: 1, stdout: "", stderr: "Not logged in" })).catch((e: unknown) => e)) as Error;
     expect(error.message).toMatch(/^Agent stopped without finishing: claude exited 1 without a JSON result\.\nNot logged in/);
@@ -129,7 +137,7 @@ describe("spawnSession", () => {
 
   it("AC8: writes the prompt to the child's stdin and collects its output and exit code", async () => {
     const echo = "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{process.stdout.write(s.toUpperCase());process.exitCode=3;})";
-    expect(await spawnSession(process.execPath, node(echo), options("the prompt"))).toEqual({ code: 3, stdout: "THE PROMPT", stderr: "", timedOut: false });
+    expect(await spawnSession(process.execPath, node(echo), options("the prompt"))).toEqual({ code: 3, stdout: "THE PROMPT", stderr: "", timedOut: false, outputTooLarge: false });
   });
 
   it("AC8: reports a child that exits before reading a large prompt as a failure, instead of crashing on the broken pipe", async () => {
@@ -161,18 +169,23 @@ describe("createSpawnSession", () => {
     await createSpawnSession(run)("claude", ["-p"], options);
     const [file, args, execOptions] = run.mock.calls[0]!;
     expect([file, args]).toEqual(["claude", ["-p"]]);
-    expect(execOptions).toMatchObject({ cwd: "/repo", env: { PATH: "/bin" }, timeout: 1_800_000, killSignal: "SIGTERM" });
+    expect(execOptions).toMatchObject({ cwd: "/repo", env: { PATH: "/bin" }, timeout: 1_800_000, killSignal: "SIGTERM", maxBuffer: MAX_SESSION_OUTPUT_BYTES });
     expect(execOptions.shell).toBeUndefined();
     expect(written.join("")).toBe("the prompt");
   });
 
   it("AC8: reports a session execFile killed on its timeout as timed out", async () => {
     const { run } = fakeExecFile({ killed: true, signal: "SIGTERM" });
-    expect(await createSpawnSession(run)("claude", [], options)).toEqual({ code: 1, stdout: "", stderr: "", timedOut: true });
+    expect(await createSpawnSession(run)("claude", [], options)).toEqual({ code: 1, stdout: "", stderr: "", timedOut: true, outputTooLarge: false });
+  });
+
+  it("AC8: reports a session execFile killed for passing maxBuffer as too much output, not as a timeout", async () => {
+    const { run } = fakeExecFile({ killed: true, signal: "SIGTERM", code: "ERR_CHILD_PROCESS_STDIO_MAXBUFFER" as unknown as number }, "partial");
+    expect(await createSpawnSession(run)("claude", [], options)).toEqual({ code: 1, stdout: "partial", stderr: "", timedOut: false, outputTooLarge: true });
   });
 
   it("AC8: passes a numeric exit code through, and maps a failure without one to 1", async () => {
-    expect(await createSpawnSession(fakeExecFile({ code: 2 }, "", "bad flag").run)("claude", [], options)).toEqual({ code: 2, stdout: "", stderr: "bad flag", timedOut: false });
+    expect(await createSpawnSession(fakeExecFile({ code: 2 }, "", "bad flag").run)("claude", [], options)).toEqual({ code: 2, stdout: "", stderr: "bad flag", timedOut: false, outputTooLarge: false });
     expect(await createSpawnSession(fakeExecFile({ code: "ENOENT" as unknown as number }).run)("claude", [], options)).toMatchObject({ code: 1, timedOut: false });
   });
 });
