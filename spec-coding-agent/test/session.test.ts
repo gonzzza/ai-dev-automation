@@ -2,8 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import { AGENT_REPORT_JSON_SCHEMA, AgentReportSchema, type AgentReport, type AgentTask } from "../src/agent.js";
 import type { RunEvent, RunLog } from "../src/runlog.js";
 import { classifyFailure } from "../src/runlog.js";
+import type { ExecFileException } from "node:child_process";
 import { tmpdir } from "node:os";
-import { MAX_SESSION_MINUTES, runSession, sessionEnv, spawnSession, type SessionConfig, type SessionResult, type SessionSpawn } from "../src/session.js";
+import { Writable } from "node:stream";
+import { createSpawnSession, MAX_SESSION_MINUTES, runSession, sessionEnv, spawnSession, type ExecFileFn, type SessionConfig, type SessionResult, type SessionSpawn } from "../src/session.js";
 
 const report: AgentReport = { plan: ["Read the code", "Write it"], summary: "Adds x.", testing: "Unit tests.", checksPassed: true, notes: "", sections: [] };
 const task: AgentTask<AgentReport> = { prompt: "Implement the spec.", schema: AgentReportSchema };
@@ -140,8 +142,37 @@ describe("spawnSession", () => {
     expect(result).toMatchObject({ code: 1, timedOut: false });
   });
 
-  it("AC8: kills a session that runs past its time limit and reports the timeout", async () => {
-    const result = await spawnSession(process.execPath, node("setInterval(()=>{},1000)"), options("p", 500));
-    expect(result.timedOut).toBe(true);
+});
+
+// execFile's own timer kills the session; a fake execFile stands in for it, so no test waits on real time.
+describe("createSpawnSession", () => {
+  function fakeExecFile(error: Partial<ExecFileException> | null, stdout = "", stderr = "") {
+    const written: string[] = [];
+    const run = vi.fn<ExecFileFn>((_file, _args, _options, callback) => {
+      queueMicrotask(() => callback(error as ExecFileException | null, stdout, stderr));
+      return { stdin: new Writable({ write: (chunk: Buffer, _encoding, done) => void (written.push(String(chunk)), done()) }) };
+    });
+    return { run, written };
+  }
+  const options = { cwd: "/repo", env: { PATH: "/bin" }, input: "the prompt", timeoutMs: 1_800_000 };
+
+  it("AC8: gives execFile the time limit and SIGTERM, with no shell, and writes the prompt to stdin", async () => {
+    const { run, written } = fakeExecFile(null, "{}");
+    await createSpawnSession(run)("claude", ["-p"], options);
+    const [file, args, execOptions] = run.mock.calls[0]!;
+    expect([file, args]).toEqual(["claude", ["-p"]]);
+    expect(execOptions).toMatchObject({ cwd: "/repo", env: { PATH: "/bin" }, timeout: 1_800_000, killSignal: "SIGTERM" });
+    expect(execOptions.shell).toBeUndefined();
+    expect(written.join("")).toBe("the prompt");
+  });
+
+  it("AC8: reports a session execFile killed on its timeout as timed out", async () => {
+    const { run } = fakeExecFile({ killed: true, signal: "SIGTERM" });
+    expect(await createSpawnSession(run)("claude", [], options)).toEqual({ code: 1, stdout: "", stderr: "", timedOut: true });
+  });
+
+  it("AC8: passes a numeric exit code through, and maps a failure without one to 1", async () => {
+    expect(await createSpawnSession(fakeExecFile({ code: 2 }, "", "bad flag").run)("claude", [], options)).toEqual({ code: 2, stdout: "", stderr: "bad flag", timedOut: false });
+    expect(await createSpawnSession(fakeExecFile({ code: "ENOENT" as unknown as number }).run)("claude", [], options)).toMatchObject({ code: 1, timedOut: false });
   });
 });

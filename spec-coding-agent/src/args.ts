@@ -107,6 +107,6 @@ export function waveAgentArgs(options: WaveOptions): string[] {
  */
 export function parseMaxMinutes(raw: string): number {
   const minutes = parseLimit("--max-minutes", raw, { integer: true });
-  if (minutes > MAX_SESSION_MINUTES) throw new Error(`--max-minutes must be at most ${MAX_SESSION_MINUTES}, got "${raw}".`);
+  if (minutes > MAX_SESSION_MINUTES) throw new RangeError(`--max-minutes must be at most ${MAX_SESSION_MINUTES}, got "${raw}".`);
   return minutes;
 }

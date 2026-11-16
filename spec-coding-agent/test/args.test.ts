@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { parseMaxMinutes, usageErrorOf, waveAgentArgs, type ModeFlags } from "../src/args.js";
+import { classifyFailure } from "../src/runlog.js";
 import { MAX_SESSION_MINUTES } from "../src/session.js";
 
 const none: ModeFlags = { plan: false, positionals: 0, fixPr: false, dryRun: false, base: false, dispatch: false, maxParallel: false, local: false, worktreeDir: false, session: false, maxTurns: false, maxMinutes: false };
@@ -87,7 +88,8 @@ describe("parseMaxMinutes", () => {
   it("AC8: accepts a positive integer up to the session limit, and rejects anything else before any git work", () => {
     expect(parseMaxMinutes("45")).toBe(45);
     expect(parseMaxMinutes(String(MAX_SESSION_MINUTES))).toBe(MAX_SESSION_MINUTES);
-    expect(() => parseMaxMinutes(String(MAX_SESSION_MINUTES + 1))).toThrow(`--max-minutes must be at most ${MAX_SESSION_MINUTES}, got "${MAX_SESSION_MINUTES + 1}".`);
+    expect(() => parseMaxMinutes(String(MAX_SESSION_MINUTES + 1))).toThrow(new RangeError(`--max-minutes must be at most ${MAX_SESSION_MINUTES}, got "${MAX_SESSION_MINUTES + 1}".`));
+    expect(classifyFailure(`--max-minutes must be at most ${MAX_SESSION_MINUTES}, got "x".`)).toBe("config");
     for (const raw of ["0", "-1", "1.5", "abc", ""]) expect(() => parseMaxMinutes(raw)).toThrow(/^--max-minutes must be a positive integer/);
   });
 });

@@ -1,4 +1,5 @@
-import { execFile } from "node:child_process";
+import { execFile, type ExecFileException, type ExecFileOptions } from "node:child_process";
+import type { Writable } from "node:stream";
 import type { AgentRun, AgentTask } from "./agent.js";
 import { AGENT_REPORT_JSON_SCHEMA } from "./agent.js";
 import type { RunLog } from "./runlog.js";
@@ -117,17 +118,33 @@ export async function runSession<Report>(task: AgentTask<Report>, config: Sessio
   return { report: report.data, costUsd: message.total_cost_usd ?? 0, turns: message.num_turns ?? 0, durationMs: message.duration_ms ?? 0 };
 }
 
-/** The default spawn: no shell (claude is a native binary), the prompt on stdin, killed on timeout. */
-export const spawnSession: SessionSpawn = (command, args, { cwd, env, input, timeoutMs }) =>
-  new Promise((resolve) => {
-    const child = execFile(command, args, { cwd, env, timeout: timeoutMs, killSignal: "SIGTERM", maxBuffer: 64 * 1024 * 1024 }, (error, stdout, stderr) => {
-      const timedOut = Boolean(error && "killed" in error && error.killed);
-      const code = error ? (typeof error.code === "number" ? error.code : 1) : 0;
-      resolve({ code, stdout: String(stdout), stderr: String(stderr), timedOut });
+/** The slice of `child_process.execFile` the default spawn uses, so tests can fake its timer. */
+export type ExecFileFn = (
+  file: string,
+  args: string[],
+  options: ExecFileOptions,
+  callback: (error: ExecFileException | null, stdout: string | Buffer, stderr: string | Buffer) => void,
+) => { stdin: Writable | null };
+
+/**
+ * A spawn with no shell (claude is a native binary), the prompt on stdin, and execFile's own
+ * timeout, which kills the session with SIGTERM.
+ */
+export function createSpawnSession(run: ExecFileFn = execFile): SessionSpawn {
+  return (command, args, { cwd, env, input, timeoutMs }) =>
+    new Promise((resolve) => {
+      const child = run(command, args, { cwd, env, timeout: timeoutMs, killSignal: "SIGTERM", maxBuffer: 64 * 1024 * 1024 }, (error, stdout, stderr) => {
+        const timedOut = Boolean(error && "killed" in error && error.killed);
+        const code = error ? (typeof error.code === "number" ? error.code : 1) : 0;
+        resolve({ code, stdout: String(stdout), stderr: String(stderr), timedOut });
+      });
+      // A child that exits before reading the whole prompt (not signed in, a bad flag, not installed)
+      // breaks the pipe. That write error is expected, and the execFile callback reports the real
+      // failure; unhandled, it would crash the harness before run.end is logged.
+      child.stdin?.on("error", () => {});
+      child.stdin?.end(input);
     });
-    // A child that exits before reading the whole prompt (not signed in, a bad flag, not installed)
-    // breaks the pipe. That write error is expected, and the execFile callback reports the real
-    // failure; unhandled, it would crash the harness before run.end is logged.
-    child.stdin?.on("error", () => {});
-    child.stdin?.end(input);
-  });
+}
+
+/** The default spawn, with the real execFile. */
+export const spawnSession: SessionSpawn = createSpawnSession();
