@@ -7,14 +7,16 @@ Built on the [Claude Agent SDK](https://code.claude.com/docs/en/agent-sdk), the 
 ## Usage
 
 ```sh
-# once: an API key in the environment, or in an untracked .env at the repo root
+# once, for Agent SDK runs: an API key in the environment, or in an untracked .env at the repo root
 # (convenient for trusted specs; see "What this does not cover" below)
 export ANTHROPIC_API_KEY=sk-ant-...
 
 git switch main && git pull
-npm run agent -- specs/001-rate-limiter.md            # opens a PR
+npm run agent -- specs/001-rate-limiter.md            # opens a PR (API)
 npm run agent -- specs/001-rate-limiter.md --dry-run  # verify only, leave changes uncommitted
+npm run agent -- specs/001-rate-limiter.md --session  # Claude Code writes it, on its signed-in account (see "Session runs")
 npm run agent -- --plan                               # which specs are ready (see "Coordinator")
+npm run agent -- --plan --local                       # run the ready ones here, as parallel sessions (see "Local waves")
 ```
 
 Requires `git` and an authenticated [`gh`](https://cli.github.com/).
@@ -25,8 +27,10 @@ Requires `git` and an authenticated [`gh`](https://cli.github.com/).
 | `--base <branch>` | `main` | Branch to start from and target. |
 | `--model <id>` | `claude-opus-5-5` | |
 | `--effort <level>` | `high` | `low` to `max`. |
-| `--max-turns <n>` | `60` | Hard stop on agent turns. |
-| `--max-budget <usd>` | `5` | Hard stop on spend. |
+| `--max-turns <n>` | `60` | Hard stop on agent turns. Not with `--session`. |
+| `--max-budget <usd>` | `5` | Hard stop on spend. For `--session`, a cap on Claude Code's own estimate. |
+| `--session` | off | Write the code with headless Claude Code instead of the Agent SDK. See [session runs](#session-runs). |
+| `--max-minutes <n>` | `60` | Time limit for a `--session` run. Only with `--session` or `--local`. |
 | `--dry-run` | off | Run and verify, but don't commit, push or open a PR. |
 | `--log-dir <dir>` | `<tmp>/spec-agent-runs` | Where the run's [audit log](#audit-log-and-monitoring) goes. |
 | `--sandbox <kind>` | `none` | Where agent-written tests run: `none` (this machine, with a credential-free environment) or `docker` (an isolated container; see [the sandbox](#the-checks-sandbox)). CI uses `docker`. |
@@ -39,22 +43,38 @@ Requires `git` and an authenticated [`gh`](https://cli.github.com/).
 ## How it works
 
 ```
-spec.md ─▶ preflight ─▶ branch agent/<spec> ─▶ agent loop ─▶ npm run check ─▶ gates ─────────────▶ commit, push, gh pr create
-           clean tree,                         read, plan,    run again by     .git untouched,       PR body: the repo's PR
-           on base, read                       edit, test     the harness      scope, no secrets     template, checks, plan,
-           PR template                                                                               notes, cost
+spec.md ─▶ preflight ─▶ branch agent/<spec>, ─▶ agent loop ─▶ npm run check ─▶ gates ─────────────▶ commit, push, gh pr create
+           clean tree,    claim it on origin       read, plan,    run again by     .git untouched,       PR body: the repo's PR
+           on base, read                           edit, test     the harness      scope, no secrets     template, checks, plan,
+           PR template                                                                                   notes, cost
 ```
 
-1. **Preflight.** It must start on the base branch with a clean tree, so the PR contains only the agent's work. The branch must not exist locally or on `origin`. It then reads the repo's PR template (see [PR title and body](#pr-title-and-body)).
-2. **Agent loop.** Claude gets the spec, the PR template's sections, the repo's `CLAUDE.md` for conventions, and a fixed toolset. It plans, implements, writes tests and iterates until the checks pass. It returns a structured report (plan, summary, testing, notes, and the template's sections) that becomes the PR description.
-3. **Verification.** The harness doesn't take the agent's word for it:
+1. **Preflight.** It must start on the base branch with a clean tree, so the PR contains only the agent's work. A detached `HEAD` on `origin/<base>`, or on an older commit of it, counts as the base too: that is how a [local wave](#local-waves) runs, since a worktree can't check out `main` while the main checkout has it. The branch must not exist locally or on `origin`. It then reads the repo's PR template (see [PR title and body](#pr-title-and-body)).
+2. **Claim.** It creates the branch and pushes it to `origin` at once, still at the base commit, before the code is written and before any API spend (see [Claiming a spec](#claiming-a-spec)). A dry run doesn't claim.
+3. **Agent loop.** Claude gets the spec, the PR template's sections, the repo's `CLAUDE.md` for conventions, and a fixed toolset. It plans, implements, writes tests and iterates until the checks pass. It returns a structured report (plan, summary, testing, notes, and the template's sections) that becomes the PR description.
+4. **Verification.** The harness doesn't take the agent's word for it:
    1. It runs `npm run check` itself. This is a fast local filter. Code that ran during the session could still tamper with gitignored files such as `node_modules`. The authoritative check is CI on the PR, which starts from a clean checkout and a fresh `npm ci`.
    2. It confirms that the branch, `HEAD`, git config and hooks are unchanged.
    3. It confirms that every changed file is inside `--scope` and none is a protected config file.
    4. It scans the changed files and the PR body for credentials.
 
-   If any of these fails, nothing is committed and the branch is kept for inspection.
-4. **PR.** Commit, push and `gh pr create`. CI and the AI review run on it. A human approves and merges.
+   If any of these fails, nothing is committed and the branch is kept for inspection. The claimed branch stays on `origin`, at the base commit.
+5. **PR.** Commit, push (a fast-forward of the claimed branch) and `gh pr create`. CI and the AI review run on it. A human approves and merges. The push sets no upstream (`-u`): that writes tracking keys into the git config that parallel worktrees share, which would fail every other run in progress at its git-state check.
+
+## Session runs
+
+`--session` keeps the whole pipeline (preflight, claim, gates, commit, push, PR) and changes only who writes the code: a headless Claude Code session (`claude -p`) instead of the Agent SDK. It runs on whatever Claude Code is signed in with, so on a Claude subscription it spends no API money and needs no `ANTHROPIC_API_KEY`. It needs `claude` on `PATH`, signed in. [Local waves](#local-waves) run every spec this way.
+
+```sh
+npm run agent -- specs/007-x.md --session --scope demo-app --max-minutes 45
+```
+
+- **Your account, not the API.** The harness starts `claude` with its own environment minus `ANTHROPIC_API_KEY` and `ANTHROPIC_AUTH_TOKEN`, because Claude Code prefers an API key it finds over the signed-in account, and never with `--bare`, which reads only the API key. Sessions count against your plan's usage limits, so a wave of parallel sessions uses them up faster.
+- **The session's tools.** `--permission-mode dontAsk` denies every call the allowlist doesn't cover, instead of prompting. Allowed: `Read`, `Glob`, `Grep`, `Edit` and `Write` inside each `--scope` directory, and one shell command, `npm run check`. Denied: reading `.env` files, `CLAUDE.local.md`, `.npmrc` and key files, and `git`, `gh`, `WebFetch` and `WebSearch`. It loads project settings only, keeps no session history, and gets the same brief as the agent (`prompt.md`, with a tools rule for sessions), on stdin.
+- **Limits.** Claude Code's print mode has no turn limit, so `--max-turns` is refused and `--max-minutes` (default 60) bounds the session's wall-clock time. When it runs out, the harness kills the session and the run fails as `agent-stopped`. Only the `claude` process is killed: if the session was running `npm run check` at that moment, its npm and Vitest processes can keep running for a while in the worktree, which a wave keeps for inspection. Wait for them to finish, or end them, before you look at the worktree or remove it. `--max-budget` is passed as `--max-budget-usd`, a cap on Claude Code's own cost estimate.
+- **The gates are the same, in code.** Nobody approves a session's push, so the harness does what it does for an agent run: re-runs `npm run check` (in the Docker sandbox with `--sandbox docker`), checks that `.git` is untouched, that every change is inside `--scope` and no protected config, and scans for secrets. Only then does it commit and open the PR.
+- **Branch and PR.** The code goes on `spec/<slug>`, the prefix for code a Claude Code session wrote, as in `/code-spec` session mode. The commit says `Implements <spec> in a headless Claude Code session.`, the PR body opens with the same, and the footer marks the cost as `est.`: Claude Code computes it at list prices whatever the account is billed. The audit log gets `session.start` (the command line and the prompt) and `session.end` (Claude Code's JSON result), not the full transcript.
+- **What the session's own checks expose.** The session runs `npm run check` itself, on this machine, so agent-written tests run with your environment minus the API key: your user's files, Claude Code's sign-in included, and the network. That is the same trust as `/code-spec` session mode. `--sandbox docker` covers only the harness's re-run of the checks. Run sessions only on specs you trust.
 
 ## PR title and body
 
@@ -147,13 +167,13 @@ npm run agent -- --plan --dispatch --max-parallel 3
 | 4 | It has a PR closed without merging | `needs-human: closed (#<highest closed PR>)`. This comes before the branch rule because GitHub keeps the branch of a closed PR. |
 | 5 | Its most recent completed run failed | `needs-human: failed (<conclusion>)`. A run can fail before it pushes, or after pushing but before it opens the PR. |
 |   | Its most recent completed run succeeded | `needs-human: no-pr`. A successful run always opens a `SPEC-` PR, so that PR was retitled or deleted. |
-| 6 | `agent/<slug>` or `spec/<slug>` exists on `origin` | `in-progress (<branch>)`. The branch is the claim: the agent refuses to start on an existing branch. |
+| 6 | `agent/<slug>` or `spec/<slug>` exists on `origin` | `in-progress (<branch>)`. The branch is the claim: every run pushes it before its agent starts, and refuses to start on an existing branch. |
 | 7 | Every `depends_on` spec is `done` | `ready`, otherwise `blocked: waiting on <the unfinished ones>` |
 
 **Never retried.** Reverts, closed PRs, failed runs and runs that left no PR all go to a human. The coordinator never starts them again on its own, and fixing the cause doesn't change the state by itself. To re-arm a `needs-human` spec:
 
 1. Fix the cause (the spec, the code on `main`, the limits).
-2. Delete the spec's `agent/<slug>` branch on `origin` if it still exists. The agent refuses to start on an existing branch, and GitHub keeps the branch of a PR closed without merging.
+2. Delete the spec's `agent/<slug>` or `spec/<slug>` branch on `origin` if it still exists. Every run refuses to start on an existing branch, and GitHub keeps the branch of a PR closed without merging. A branch on `origin` can also be another run's live claim, so delete it only after `--plan` shows the spec with no open PR and no run in flight. If a local wave kept a worktree for the spec, do it on that machine, following [re-arming a local failure](#local-waves).
 3. Run *Implement a spec* for it by hand.
 
 While that run is in flight, a `closed`, `failed` or `no-pr` spec shows `in-progress (run)`. A `reverted` spec stays `needs-human` until the new PR opens, since the merged-PR rule comes first, and becomes `done` when that PR merges. The run history is the last 200 runs, so a failure older than that is no longer seen, and the spec can get at most one more automatic attempt.
@@ -169,6 +189,64 @@ While that run is in flight, a `closed`, `failed` or `no-pr` spec shows `in-prog
 The audit log gets a `plan.result` event with the whole plan, and one `dispatch` event per spec started.
 
 **In CI.** The *Plan spec runs* workflow ([`plan-specs.yml`](../.github/workflows/plan-specs.yml)) runs `--plan` on every push to `main` and writes the plan to the run's summary, so each merge shows which specs it unblocked. It also plans when an *Implement a spec* run finishes, since a failed run, or one that opened its PR, changes a spec's state without a push. Only a person dispatches: run the workflow from the Actions tab with *dispatch* checked (and optionally *max-parallel*). A merge never starts agent runs on its own, because CI agent runs are limited to `demo-app`. A spec that changes the harness itself shows as `ready` but is coded in a session with `/code-spec`. The plan job only reads (`contents`, `pull-requests` and `actions: read`). The dispatch job also gets `actions: write`, and its runs start the usual *Implement a spec* workflow, which acts as the agent's App.
+
+### Claiming a spec
+
+Every non-dry run claims its spec before the code is written: right after creating its branch (`agent/<slug>`, or `spec/<slug>` for a [session run](#session-runs)), it pushes the branch, still at the base commit, with `git push --porcelain --no-verify --force-with-lease=<branch>: origin <branch>`. The empty value after the colon means "this branch must not exist on `origin` yet", and the server checks it, so of two runs racing for one spec only one creates the branch. Git skips that check when `origin` already has the branch at the same commit, which is exactly what two runs started from the same `main` do, and reports the push as up to date. So the claim also requires the porcelain status to say the branch was created.
+
+A spec has two branch names, one per kind of run, and a run holds both: it refuses to start when either exists, and after its claim it checks that the other isn't on `origin`. If it is, a run of the other kind claimed in the same seconds, and this run stops as a lost race. In that exact race both may stop, which is a false alarm, never two implementations. Local and CI coordinators can therefore run side by side without implementing a spec twice.
+
+**A branch can't tell a live claim from a stale one.** A run that claims and then fails leaves its branch on `origin` with nobody working on it, and nothing in the branch says so. So whenever the state is ambiguous, the run fails loudly and a person decides:
+
+- **A lost race.** The claim push fails, and the branch is then on `origin`, or the spec's other branch name is on `origin` after the claim. It didn't exist at preflight a few seconds earlier, so another run created it and is certainly alive. The run stops with `Another run already claimed <spec>: <branch> exists on origin.`, before the code is written, and exits with code `3`. Its `run.end` gets the category `claim-lost`. This is the only case with its own exit code.
+- **Any other failed claim** (credentials, network, permissions, a server hook, or `origin` unreadable afterwards) is an ordinary failure with the push's own error, exit code `1`.
+- **A failed check after a successful claim.** If `origin` can't be read when the run checks for the spec's other branch name, the run stops with exit code `1` and an error that names its own claim branch, now stranded on `origin`, and says to delete it once `--plan` shows no open PR and no run in flight.
+- **A branch already on `origin` at preflight** is the ordinary `Branch … already exists` failure, exit code `1`. It may be a live claim or a stale one.
+- **A claim that only looks lost.** If the push creates the branch but the connection drops before git hears back, the run sees a failed push and then finds the branch on `origin`: its own claim, read as a lost race. A run can't tell its own claim from another run's at the same commit, so this rare case also exits `3`. In a local wave its worktree is removed, and the branch stays on `origin` with no run behind it. The spec then shows `in-progress (<branch>)` with no PR and no run, which is the sign to re-arm it as below.
+- **A run that fails after claiming** leaves its branch on `origin`. The coordinator then shows the spec as `in-progress (<branch>)`, or `needs-human: failed` for a CI run, and every retry fails at preflight until a person deletes the branch.
+
+Only local waves act on exit code `3`. CI doesn't: a CI run that loses a race fails and shows as `needs-human: failed`. That takes two runs passing preflight within the same few seconds, and a false alarm is better than a hidden failure.
+
+### Local waves
+
+`--local` runs the plan on this machine instead of in CI, on your Claude Code account. Each ready spec gets its own git worktree and a [session run](#session-runs) in it, all in parallel, each with the usual per-run limits and gates. The runs still never talk to each other.
+
+```sh
+npm run agent -- --plan --local                                  # up to 2 ready specs at once
+npm run agent -- --plan --local --max-parallel 3 --scope spec-coding-agent --max-minutes 45 --sandbox docker
+```
+
+| Option | Default | |
+|--------|---------|---|
+| `--local` | off | Needs `--plan`. Can't be combined with `--dispatch`. |
+| `--max-parallel <n>` | `2` | Most runs in one wave, lowest spec number first. |
+| `--worktree-dir <dir>` | `<repo>-worktrees`, next to the repo | Where the worktrees go, one folder per spec slug. Only with `--local`. |
+
+It needs `claude` on `PATH`, signed in, and no `ANTHROPIC_API_KEY`: it removes the API key variables from the runs' environment, so every session uses your account. Every run gets `--session` and the same `--scope`, `--model`, `--effort`, `--max-minutes`, `--max-budget`, `--sandbox`, `--sandbox-image`, `--standards`, `--standards-packs`, `--standards-ref` and `--max-standards-chars`. `--max-turns` is refused. `--log-dir` is made absolute, so every run's audit log lands in one folder. Other relative paths resolve in each worktree, which is at `origin/main`. Parallel sessions share your plan's usage limits.
+
+A wave, in order:
+
+1. **Checkout.** The same checks as `--dispatch`: it fetches `origin main`, and stops unless `HEAD` is `origin/main` with nothing uncommitted under `specs/`.
+2. **Lock.** It creates the worktree folder if needed and takes `<worktree dir>/.lock`, so two waves on one machine never read each other's worktrees as failures. If the lock exists, it stops: `Another local wave is running, or one crashed and left <path>; delete it if none is running.`
+3. **Plan.** The same GitHub reads as `--plan`. It then runs `git worktree prune` and `git worktree list`: a spec whose worktree is still there from an earlier wave shows `needs-human: local-worktree (<path>)` instead of `ready` or `in-progress (<branch>)`. Once a PR or a run exists, GitHub's state wins.
+4. **Prepare.** For each chosen spec, in turn: `git worktree add --detach <worktree dir>/<slug> origin/main`, then `npm ci` in it. Each worktree needs its own `node_modules`, because the workspace packages are linked in it. With `--sandbox docker`, it then installs the sandbox's dependency volume once, so the runs don't install into it at the same time. If any of this fails, it removes the wave's worktrees and stops before any run starts.
+5. **Run.** It starts `npm run agent -- <spec> --session <options>` in every worktree at once. Each output line is printed with the spec number in front, such as `[007] Created spec/007-…`. One run failing doesn't stop the others.
+6. **Clean up**, by each run's exit code:
+   - `0`, a PR was opened: it removes the worktree.
+   - `3`, a lost claim: the worktree holds no work, so it removes it and deletes the local `spec/<slug>` branch.
+   - anything else: it keeps the worktree as the record of the failure and prints its path. The process then exits non-zero. A lost claim alone doesn't count as a failure.
+
+The audit log gets `local.start` (`spec`, `worktree`) and `local.end` (`spec`, `worktree`, `exitCode`, `kept`) for each run.
+
+**Re-arming a local failure.** The spec shows `needs-human: local-worktree` on this machine, and `in-progress (<branch>)` everywhere else. On this machine:
+
+1. Look at the kept worktree, and fix the cause.
+2. `git worktree remove --force <path>`, or `git worktree prune` if the folder is already gone.
+3. Delete the local branch: `git branch -D spec/<slug>`.
+4. Run `--plan` and check that the spec has no open PR and no run in flight. Only then delete the claim branch on `origin`: `git push origin --delete spec/<slug>`.
+5. Run the wave again.
+
+**Interrupting a wave** (Ctrl-C) leaves its worktrees, their claim branches on `origin` and the lock behind. Clean them up as above, and delete the lock once no wave is running.
 
 ## Audit log and monitoring
 
@@ -195,7 +273,9 @@ From any line on `main`, `git log` leads to the run that wrote it, and from ther
 | `checks.result` | The harness's own re-run of `npm run check` |
 | `agent.end` | The SDK's result: outcome, cost, turns, duration |
 | `log` | The progress lines printed to the console |
-| `run.end` | Always written, even on failure. `ok`, duration and the outcome, or the error and a `category`: `config`, `bad-input`, `preflight`, `agent-stopped`, `bad-report`, `checks-failed`, `git-state-changed`, `out-of-scope`, `secret-found` or `no-changes` |
+| `session.start` / `session.end` | Session runs: the `claude` command line and prompt, and Claude Code's JSON result (outcome, turns, duration, estimated cost) |
+| `plan.result`, `dispatch`, `local.start`, `local.end` | Coordinator runs: the plan, each CI run dispatched, and each run of a [local wave](#local-waves) |
+| `run.end` | Always written, even on failure. `ok`, duration and the outcome, or the error and a `category`: `config`, `bad-input`, `preflight`, `claim-lost`, `agent-stopped`, `bad-report`, `checks-failed`, `git-state-changed`, `out-of-scope`, `secret-found` or `no-changes` |
 
 - **Redaction.** Every line is redacted before it's written: credential values from the environment, and anything matching a known key format, become `[REDACTED]`.
 - **Location.** The log lives outside the repository, so the agent's own tools can't reach it. It's created owner-only (`0700` directory, `0600` file).
@@ -256,7 +336,7 @@ The gates catch changes to the repo before anything is committed, and anything e
 - reading a file and sending it over the network;
 - changing your user-level configuration, such as `~/.gitconfig`, gh's config or your shell profile, which later commands, the harness's own included, would pick up.
 
-Protecting all of that is a job for an operating-system boundary, not for checks inside the process.
+Protecting all of that is a job for an operating-system boundary, not for checks inside the process. [Session runs](#session-runs) have the same exposure, and more: the session runs `npm run check` itself, with your environment minus the API key.
 
 **`--sandbox docker` is that boundary for the checks.** Use it wherever secrets live; the fix cycle in CI does. Without it, the defenses above are layered but not a sandbox. Run on your machine only specs you trust, with the key in an environment variable rather than in `.env`.
 
@@ -305,7 +385,9 @@ Tests cover:
 - the spec parser;
 - the permission policy;
 - the secret handling;
-- the pipeline gates;
+- the pipeline gates, the claim and the detached-`HEAD` preflight;
+- session runs: the exact `claude` command, its environment without the API key, and the mapping of its JSON result;
+- the coordinator and local waves, with git's claim and worktree behavior checked against a real repository with a local `origin`;
 - the PR title and body: the `SPEC-XXX` title and its cut, the template parser, the prompt it produces and the body built from it;
 - the org standards: loading from fixtures, the system prompt they produce, and the PR body section;
 - the fix cycle: findings parsing, the cycle limit and progress rules, and its gates;

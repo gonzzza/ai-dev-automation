@@ -112,3 +112,69 @@ describe("Git, against a real repo", () => {
     expect(committed).toBe("A\tdemo-app/new.ts");
   });
 });
+
+// Two worktrees of one repository with a local bare origin, as in a local wave.
+describe("AC3: claiming from parallel worktrees, against a real repo", () => {
+  let root: string;
+  let main: string;
+  let a: string;
+  let b: string;
+  const sh = (cwd: string, ...args: string[]) => String(execFileSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", ...args], { cwd })).trim();
+  const commit = (cwd: string, message: string) => sh(cwd, "commit", "-q", "--allow-empty", "-m", message);
+
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), "agent-claim-test-"));
+    main = join(root, "main");
+    a = join(root, "wt-a");
+    b = join(root, "wt-b");
+    execFileSync("git", ["init", "-q", "--bare", "-b", "main", join(root, "origin.git")]);
+    mkdirSync(main);
+    sh(main, "init", "-q", "-b", "main");
+    sh(main, "config", "user.name", "t"); // Git.commit runs without -c overrides
+    sh(main, "config", "user.email", "t@t");
+    commit(main, "init");
+    sh(main, "remote", "add", "origin", join(root, "origin.git"));
+    sh(main, "push", "-q", "origin", "main");
+    sh(main, "fetch", "-q", "origin");
+    sh(main, "worktree", "add", "-q", "--detach", a, "origin/main");
+    sh(main, "worktree", "add", "-q", "--detach", b, "origin/main");
+  });
+  afterEach(() => rmSync(root, { recursive: true, force: true }));
+
+  it("AC3: the first claim creates the branch; a second, from the other worktree at the same commit, fails", { timeout: 30_000 }, async () => {
+    await new Git(exec, a).createBranch("agent/001-x");
+    await new Git(exec, a).claimBranch("agent/001-x");
+    expect(sh(main, "ls-remote", "--heads", "origin", "refs/heads/agent/001-x")).toMatch(/\trefs\/heads\/agent\/001-x$/);
+    // Branches are shared between worktrees, so B pushes the same ref at the same commit.
+    await expect(new Git(exec, b).claimBranch("agent/001-x")).rejects.toThrow(/did not create agent\/001-x/);
+    expect(await new Git(exec, b).branchExistsOnOrigin("agent/001-x")).toBe(true);
+  });
+
+  it("AC3: a claim whose branch is at another commit is rejected by the lease", { timeout: 30_000 }, async () => {
+    sh(a, "switch", "-qc", "agent/001-x");
+    await new Git(exec, a).claimBranch("agent/001-x");
+    commit(a, "moved on");
+    await expect(new Git(exec, a).claimBranch("agent/001-x")).rejects.toThrow(/rejected|stale info/);
+  });
+
+  it("AC3: branching, claiming and pushing in worktree A leave worktree B's fingerprint unchanged", { timeout: 30_000 }, async () => {
+    const gitA = new Git(exec, a);
+    const before = await new Git(exec, b).fingerprint();
+    await gitA.createBranch("agent/001-x");
+    await gitA.claimBranch("agent/001-x");
+    writeFileSync(join(a, "new.txt"), "work");
+    await gitA.commit(["new.txt"], "SPEC-001 x");
+    await gitA.push("agent/001-x");
+    expect(await new Git(exec, b).fingerprint()).toBe(before);
+    expect(sh(main, "config", "--list")).not.toMatch(/branch\.agent\/001-x\./);
+  });
+
+  it("AC3: headOnBase is true behind origin/main and false for a commit that isn't on it", { timeout: 30_000 }, async () => {
+    commit(main, "later");
+    sh(main, "push", "-q", "origin", "main");
+    sh(main, "fetch", "-q", "origin"); // moves the shared origin/main past both worktrees
+    expect(await new Git(exec, b).headOnBase("main")).toBe(true);
+    commit(b, "not on main");
+    expect(await new Git(exec, b).headOnBase("main")).toBe(false);
+  });
+});

@@ -124,6 +124,7 @@ export type FailureCategory =
   | "config"
   | "bad-input"
   | "preflight"
+  | "claim-lost"
   | "agent-stopped"
   | "bad-report"
   | "checks-failed"
@@ -146,6 +147,7 @@ export function classifyFailure(message: string): FailureCategory {
     [/^The agent changed files outside|^The run created symlinks/, "out-of-scope"],
     [/^Possible secret in/, "secret-found"],
     [/^The agent made no changes/, "no-changes"],
+    [/^Another run already claimed /, "claim-lost"],
     [/^(Check out |Working tree is not clean|Branch .* already exists|PR #\d+ |Local .* is at )/, "preflight"],
     [/^(Set ANTHROPIC_API_KEY|Invalid --|--\S+ )/, "config"],
     [/^Findings (are not valid JSON|do not match)|: (spec must|spec is missing|file name must)|^ENOENT: /, "bad-input"],

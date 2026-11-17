@@ -16,7 +16,7 @@ export const AgentReportSchema = z.object({
   plan: z.array(z.string()).describe("The steps you planned, in order, one short sentence each."),
   summary: z.string().describe("What you built and the main design decisions, 2-5 sentences, for the PR description."),
   testing: z.string().describe("Which tests you added and what they cover."),
-  checksPassed: z.boolean().describe("Whether the last run_checks call returned PASSED."),
+  checksPassed: z.boolean().describe("Whether the last run of the checks passed."),
   notes: z.string().describe("Anything the reviewer should know: assumptions, spec ambiguities, follow-ups. Empty if none."),
   sections: z
     .array(z.object({ heading: z.string(), text: z.string() }))
@@ -70,8 +70,15 @@ export function fillTemplate(template: string, values: Record<string, string>): 
   });
 }
 
-export function buildPrompt(template: string, spec: Spec, writableDirs: string[], prTemplate?: PrTemplate): string {
+/** The prompt's tools rule: how each kind of run lints, typechecks and runs the tests. */
+export const TOOLS_TEXT: Record<"agent" | "session", string> = {
+  agent: "You have no shell. Call the run_checks tool: it is the only way to lint, typecheck and run tests.",
+  session: "Your only shell command is `npm run check` (lint, typecheck, all tests). Run it with Bash; every other command, git and gh included, is denied.",
+};
+
+export function buildPrompt(template: string, spec: Spec, writableDirs: string[], prTemplate?: PrTemplate, kind: "agent" | "session" = "agent"): string {
   return fillTemplate(template, {
+    tools: TOOLS_TEXT[kind],
     writableDirs: writableDirs.join(", "),
     prTemplate: prTemplatePrompt(prTemplate),
     specPath: spec.path,
@@ -86,8 +93,8 @@ export interface AgentTask<Report> {
 }
 
 /** The implement-a-spec task, from spec-coding-agent/prompt.md. */
-export async function specTask(spec: Spec, writableDirs: string[], prTemplate?: PrTemplate): Promise<AgentTask<AgentReport>> {
-  return { prompt: buildPrompt(await loadPromptTemplate(), spec, writableDirs, prTemplate), schema: AgentReportSchema };
+export async function specTask(spec: Spec, writableDirs: string[], prTemplate?: PrTemplate, kind: "agent" | "session" = "agent"): Promise<AgentTask<AgentReport>> {
+  return { prompt: buildPrompt(await loadPromptTemplate(), spec, writableDirs, prTemplate, kind), schema: AgentReportSchema };
 }
 
 /** One line per notable event, so a human watching the terminal can follow along. */
