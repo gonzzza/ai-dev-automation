@@ -17,7 +17,7 @@
     "tsx": "^4.23.15"
   },
   "dependencies": {
-    "@anthropic-ai/claude-agent-sdk": "^0.3.319",
+    "@anthropic-ai/claude-agent-sdk": "^0.3.325",
     "standards": "*",
     "zod": "^4.6.7"
   }
